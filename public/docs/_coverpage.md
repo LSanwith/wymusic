@@ -9,6 +9,6 @@
 
 [Github](https://github.com/neteasecloudmusicapienhanced/api-enhanced)
 [前往本家](https://github.com/binaryify/NeteaseCloudMusicApi)
-[快速开始](#neteasecloudmusicapienhanced)
+[快速开始](#/?id=neteasecloudmusicapi)
 
 ![color](#ffffff)
