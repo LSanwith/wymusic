@@ -1,6 +1,6 @@
-# NeteaseCloudMusicAPI Enhanced
+# Sanwith的网易云音乐API
 
-> 🎉 全网收集最全的网易云音乐api接口 基于[NeteaseCloudMusicAPI](https://github.com/binaryify/NeteaseCloudMusicApi)的复刻版本
+> 🎉 基于[NeteaseCloudMusicAPI](https://github.com/binaryify/NeteaseCloudMusicApi)的复刻版本
 
 - ⚡ 四种加密模式 · 后端代理
 - 🪛 具备多达200多个接口
