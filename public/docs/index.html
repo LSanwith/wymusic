@@ -1,16 +1,119 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="KEYWords" contect="网易云音乐,网易云音乐 api,网易云音乐 nodejs,网易云音乐 node.js">
+  <meta name="keywords" content="网易云音乐,网易云音乐 api,网易云音乐 nodejs,网易云音乐 node.js">
   <meta name="description" content="网易云音乐 NodeJS API Enhanced">
   <title>网易云音乐 NodeJS API Enhanced</title>
   <link rel="icon" href="netease.png">
-  <meta name="description" content="Description">
   <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
   <meta name="referrer" content="never">
   <link rel="stylesheet" href="//unpkg.com/docsify/lib/themes/vue.css" id="theme-css">
   <style>
+    /* ========== 全局玻璃质感主题 ========== */
+    :root {
+      --bg-image: url('https://p26-flow-imagex-sign.byteimg.com/tos-cn-i-a9rns2rl98/432ea38e891e4d609fd380be818286e3.jpg~tplv-a9rns2rl98-image.png?lk3s=8e244e95&rcl=20260731031725269C2FFE3BC717CC2884&rrcfp=dafada99&x-expires=2101663045&x-signature=s6KntYPO6hjEuAYbm3RAdfvx%2FQ0%3D');
+    }
+
+    body {
+      background-image: var(--bg-image);
+      background-size: cover;
+      background-position: center;
+      background-attachment: fixed;
+      background-repeat: no-repeat;
+      position: relative;
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: #ffffff;
+      overflow-x: hidden;
+    }
+
+    /* 深色遮罩 */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(2px);
+      -webkit-backdrop-filter: blur(2px);
+    }
+
+    /* 内容卡片包裹层 (docsify 渲染区域) */
+    .markdown-section {
+      background: rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 16px;
+      padding: 32px 36px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1);
+      max-width: 960px;
+      margin: 32px auto;
+      color: rgba(255,255,255,0.92);
+    }
+
+    /* 侧边栏毛玻璃 */
+    .sidebar {
+      background: rgba(20, 20, 30, 0.75) !important;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-right: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .sidebar-nav a {
+      color: rgba(255,255,255,0.8) !important;
+    }
+    .sidebar-nav a:hover {
+      color: #fff !important;
+    }
+
+    /* 顶部导航栏 */
+    .app-nav {
+      background: rgba(20, 20, 30, 0.7);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+
+    /* 搜索框 */
+    .search input {
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #fff;
+    }
+
+    /* 链接样式 */
+    a {
+      color: #fff;
+      border-bottom: 1px dotted rgba(255,255,255,0.5);
+      text-decoration: none;
+      transition: 0.2s;
+    }
+    a:hover {
+      border-bottom-color: #fff;
+      text-shadow: 0 0 10px rgba(255,255,255,0.4);
+    }
+
+    /* 代码块 */
+    pre {
+      background: rgba(0,0,0,0.4) !important;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    code {
+      color: #e0e0e0;
+    }
+
+    /* 滚动条隐藏 */
+    html {
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    html::-webkit-scrollbar {
+      display: none;
+    }
+
+    /* 主题切换按钮 */
     .theme-toggle {
       position: fixed;
       bottom: 24px;
@@ -19,8 +122,8 @@
       width: 44px;
       height: 44px;
       border-radius: 50%;
-      border: 1px solid rgba(255,255,255,0.1);
-      background: rgba(30,30,46,0.75);
+      border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(30,30,46,0.7);
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
       color: #fff;
@@ -29,7 +132,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+      box-shadow: 0 2px 12px rgba(0,0,0,0.25);
       transition: all 0.3s cubic-bezier(0.4,0,0.2,1);
       outline: none;
       padding: 0;
@@ -38,7 +141,7 @@
     }
     .theme-toggle:hover {
       transform: scale(1.12) rotate(12deg);
-      box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
     }
     .theme-toggle:active {
       transform: scale(0.92);
@@ -46,8 +149,10 @@
     .theme-toggle.light {
       background: rgba(255,255,255,0.85);
       color: #333;
-      border-color: rgba(0,0,0,0.08);
+      border-color: rgba(0,0,0,0.1);
     }
+
+    /* 平滑过渡 */
     html, body, .sidebar, .content, .markdown-section,
     .sidebar-nav, .search, .docsify-pagination-container {
       transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
@@ -123,7 +228,6 @@
   window.dataLayer = window.dataLayer || [];
   function gtag() { dataLayer.push(arguments); }
   gtag('js', new Date());
-
   gtag('config', 'G-BPRGR23JEG');
 </script>
 </html>
