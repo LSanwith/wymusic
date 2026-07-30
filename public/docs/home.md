@@ -1,6 +1,6 @@
-# NeteaseCloudMusicApiEnhanced
+# Sanwith的网易云音乐API
 
-网易云音乐 NodeJS API Enhanced
+网易云音乐API
 
 ## 灵感来自
 
