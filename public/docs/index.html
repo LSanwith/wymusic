@@ -63,7 +63,14 @@
       border-bottom: none;
     }
     .sidebar-nav a:hover { color: #fff !important; text-shadow: 0 0 8px rgba(255,255,255,0.3); }
-    .sidebar-nav li.active > a { color: #fff !important; background: rgba(255,255,255,0.1); border-radius: 6px; }
+    
+    /* ========== 侧边栏高亮项左移5像素 ========== */
+    .sidebar-nav li.active > a { 
+      color: #fff !important; 
+      background: rgba(255,255,255,0.1); 
+      border-radius: 6px; 
+      transform: translateX(-5px); 
+    }
 
     /* ========== 主内容区毛玻璃卡片 ========== */
     .content { padding-top: 20px; }
