@@ -49,6 +49,12 @@
       border-right: 1px solid rgba(255, 255, 255, 0.08);
       color: rgba(255, 255, 255, 0.8);
     }
+
+    /* 允许侧边栏内部元素溢出，避免高亮背景被裁剪 */
+    .sidebar-nav, .sidebar-nav li, .sidebar-nav ul {
+      overflow: visible !important;
+    }
+
     .sidebar-nav a {
       color: rgba(255, 255, 255, 0.75) !important;
       transition: color 0.2s;
