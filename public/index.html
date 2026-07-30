@@ -18,10 +18,15 @@
         * {
             box-sizing: border-box;
         }
-        html,
-        body {
-            height: 100%;
+
+        html {
+            scrollbar-width: none;
+            -ms-overflow-style: none;
         }
+        html::-webkit-scrollbar {
+            display: none;
+        }
+
         body {
             margin: 0;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -30,6 +35,7 @@
             line-height: 1.6;
             position: relative;
             overflow-x: hidden;
+            overflow-y: auto;
             background-image: url('https://p26-flow-imagex-sign.byteimg.com/tos-cn-i-a9rns2rl98/432ea38e891e4d609fd380be818286e3.jpg~tplv-a9rns2rl98-image.png?lk3s=8e244e95&rcl=20260731031725269C2FFE3BC717CC2884&rrcfp=dafada99&x-expires=2101663045&x-signature=s6KntYPO6hjEuAYbm3RAdfvx%2FQ0%3D');
             background-size: cover;
             background-position: center;
@@ -44,6 +50,7 @@
             pointer-events: none;
             background: rgba(0, 0, 0, 0.6);
         }
+
         .container {
             max-width: 960px;
             margin: 40px auto;
@@ -56,6 +63,7 @@
             header.site-header h1 { font-size: 22px; }
             .block { padding: 16px; }
         }
+
         header.site-header {
             margin-bottom: 24px;
             z-index: 1;
@@ -86,7 +94,6 @@
             font-size: 14px;
         }
 
-        /* 卡片：背景2px高斯模糊 */
         .block {
             position: relative;
             z-index: 1;
@@ -146,6 +153,7 @@
         @media (max-width: 480px) {
             .kvs { grid-template-columns: 1fr; gap: 4px 12px; }
         }
+
         ul.links {
             list-style: none;
             padding: 0;
@@ -174,6 +182,7 @@
             font-size: 12px;
             border: 1px solid rgba(255,255,255,0.15);
         }
+
         pre {
             margin: 0;
             background: rgba(0,0,0,0.3);
@@ -185,6 +194,11 @@
             word-break: break-all;
             position: relative;
             z-index: 2;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        pre::-webkit-scrollbar {
+            display: none;
         }
         code {
             font-family: 'SF Mono', 'Courier New', 'Consolas', monospace;
@@ -193,7 +207,6 @@
         }
         @media (max-width: 480px) { code { font-size: 12px; } }
 
-        /* 按钮网格：加深背景，独立放大 */
         .debug-links-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -264,13 +277,20 @@
             text-decoration: none;
             border-bottom: 1px dotted rgba(255,255,255,0.3);
             transition: 0.25s;
+            padding-bottom: 1px;
+            margin: 0 6px;
         }
         footer.site-footer a:hover {
             border-bottom-color: #fff;
+            border-bottom-style: solid;
             text-shadow: 0 0 10px rgba(255,255,255,0.35);
         }
+        footer.site-footer .footer-sep {
+            color: rgba(255,255,255,0.3);
+            margin: 0 4px;
+        }
 
-        /* 鼠标光晕跟随 */
+        /* 鼠标光晕 */
         .block::before {
             content: '';
             position: absolute;
@@ -292,7 +312,6 @@
                     rgba(255,255,255,0) 70%);
         }
 
-        /* 扩散波纹 */
         .ripple-light {
             position: absolute;
             border-radius: 50%;
@@ -396,12 +415,13 @@ curl -s {origin}/search?keywords=网易云</code></pre>
 
         <footer class="site-footer">
             <a href="https://github.com/neteasecloudmusicapienhanced/api-enhanced" target="_blank">GitHub</a>
+            <span class="footer-sep">|</span>
+            <a href="https://qm.qq.com/q/eetuZkIV20" target="_blank">添加管理员QQ</a>
         </footer>
     </main>
 
     <script>
         (function() {
-            // 禁用右键
             document.addEventListener('contextmenu', e => e.preventDefault());
 
             let lastMouseX = 0;
@@ -422,13 +442,11 @@ curl -s {origin}/search?keywords=网易云</code></pre>
                        clientY >= rect.top && clientY <= rect.bottom;
             }
 
-            // 修复后的位置计算：相对于卡片 padding box 左上角
             function getRelativePos(block, clientX, clientY) {
                 const rect = block.getBoundingClientRect();
                 const style = window.getComputedStyle(block);
                 const borderLeft = parseFloat(style.borderLeftWidth) || 0;
                 const borderTop = parseFloat(style.borderTopWidth) || 0;
-                // 不需要减去padding，因为ripple是相对于padding box定位
                 return {
                     x: clientX - rect.left - borderLeft,
                     y: clientY - rect.top - borderTop
@@ -514,7 +532,7 @@ curl -s {origin}/search?keywords=网易云</code></pre>
                     }
                 });
 
-                block.addEventListener('touchend', function(e) {
+                block.addEventListener('touchend', function() {
                     if (block.classList.contains('pressed')) {
                         block.classList.remove('pressed');
                         block.style.setProperty('--light-opacity', '0');
