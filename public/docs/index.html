@@ -10,11 +10,9 @@
   <meta name="referrer" content="never">
   <link rel="stylesheet" href="//unpkg.com/docsify/lib/themes/dark.css" id="theme-css">
   <style>
-    /* ========== 全局深色背景与玻璃质感 ========== */
     :root {
       --bg-image: url('https://p26-flow-imagex-sign.byteimg.com/tos-cn-i-a9rns2rl98/432ea38e891e4d609fd380be818286e3.jpg~tplv-a9rns2rl98-image.png?lk3s=8e244e95&rcl=20260731031725269C2FFE3BC717CC2884&rrcfp=dafada99&x-expires=2101663045&x-signature=s6KntYPO6hjEuAYbm3RAdfvx%2FQ0%3D');
     }
-
     body {
       background-image: var(--bg-image);
       background-size: cover;
@@ -27,7 +25,6 @@
       color: #ffffff;
       overflow-x: hidden;
     }
-
     body::before {
       content: '';
       position: fixed;
@@ -37,19 +34,14 @@
       backdrop-filter: blur(2px);
       -webkit-backdrop-filter: blur(2px);
     }
-
     html {
       scrollbar-width: none;
       -ms-overflow-style: none;
     }
     html::-webkit-scrollbar { display: none; }
 
-    /* ========== 隐藏左下角菜单按钮 ========== */
-    .sidebar-toggle {
-      display: none !important;
-    }
+    .sidebar-toggle { display: none !important; }
 
-    /* ========== 侧边栏毛玻璃 ========== */
     .sidebar {
       background: rgba(20, 20, 30, 0.75) !important;
       backdrop-filter: blur(20px);
@@ -61,19 +53,28 @@
       color: rgba(255, 255, 255, 0.75) !important;
       transition: color 0.2s;
       border-bottom: none;
+      position: relative;
     }
     .sidebar-nav a:hover { color: #fff !important; text-shadow: 0 0 8px rgba(255,255,255,0.3); }
-    
-    /* ========== 侧边栏高亮项左移5像素（使用相对定位不破坏布局） ========== */
-    .sidebar-nav li.active > a { 
-      color: #fff !important; 
-      background: rgba(255,255,255,0.1); 
-      border-radius: 6px; 
+
+    /* 高亮背景左移但文字不动 */
+    .sidebar-nav li.active > a {
+      color: #fff !important;
+      background: transparent;
       position: relative;
-      left: -5px; 
+    }
+    .sidebar-nav li.active > a::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -5px;
+      right: 0;
+      bottom: 0;
+      background: rgba(255,255,255,0.1);
+      border-radius: 6px;
+      z-index: -1;
     }
 
-    /* ========== 主内容区毛玻璃卡片 ========== */
     .content { padding-top: 20px; }
     .markdown-section {
       background: rgba(255, 255, 255, 0.06);
@@ -87,10 +88,7 @@
       box-shadow: 0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.1);
     }
 
-    /* ========== 全局文字颜色统一白色 ========== */
-    .markdown-section, .sidebar, .app-nav, .content {
-      color: rgba(255, 255, 255, 0.92);
-    }
+    .markdown-section, .sidebar, .app-nav, .content { color: rgba(255, 255, 255, 0.92); }
     .markdown-section h1, .markdown-section h2, .markdown-section h3,
     .markdown-section h4, .markdown-section h5, .markdown-section h6 {
       color: #fff;
@@ -114,7 +112,6 @@
     .markdown-section a:hover { border-bottom-color: #fff; text-shadow: 0 0 10px rgba(255,255,255,0.4); }
     .markdown-section strong { color: #fff; font-weight: 600; }
 
-    /* ========== 内联代码（增加5%透明度） ========== */
     .markdown-section code,
     .markdown-section p code,
     .markdown-section li code,
@@ -138,7 +135,6 @@
       word-break: break-all !important;
     }
 
-    /* ========== 代码块（增加5%透明度） ========== */
     .markdown-section pre {
       background: rgba(0, 0, 0, 0.45) !important;
       backdrop-filter: blur(8px);
@@ -155,7 +151,6 @@
       color: #e8e8e8 !important;
     }
 
-    /* ========== 表格 ========== */
     .markdown-section table {
       background: rgba(255, 255, 255, 0.04);
       border-collapse: collapse;
@@ -168,7 +163,6 @@
     .markdown-section td { padding: 10px 16px; border-bottom: 1px solid rgba(255,255,255,0.08); }
     .markdown-section tr:last-child td { border-bottom: none; }
 
-    /* ========== 引用块 ========== */
     .markdown-section blockquote {
       background: rgba(255, 255, 255, 0.05);
       border-left: 4px solid rgba(255, 255, 255, 0.4);
@@ -179,7 +173,6 @@
     }
     .markdown-section hr { border: 0; height: 1px; background: rgba(255, 255, 255, 0.15); margin: 24px 0; }
 
-    /* ========== 图片处理 ========== */
     .markdown-section img {
       border-radius: 8px;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
@@ -193,15 +186,11 @@
       background: rgba(255, 255, 255, 0.05) no-repeat center;
     }
 
-    /* ========== 封面黑色字体 ========== */
     .cover h1, .cover h2, .cover p, .cover a, .cover .btn,
     .cover blockquote, .cover ul, .cover ol, .cover li,
-    .cover span, .cover div {
-      color: #333 !important;
-    }
+    .cover span, .cover div { color: #333 !important; }
     .cover .btn { background: #333; color: #fff !important; border-radius: 8px; }
 
-    /* ========== 特殊提示框适配 ========== */
     .markdown-section .tip,
     .markdown-section .warn,
     .markdown-section .danger,
@@ -231,12 +220,8 @@
       border-bottom-color: rgba(255, 255, 255, 0.5);
     }
     .markdown-section .tip code,
-    .markdown-section .warn code {
-      background: rgba(0, 0, 0, 0.25);
-      color: #f0f0f0;
-    }
+    .markdown-section .warn code { background: rgba(0, 0, 0, 0.25); color: #f0f0f0; }
 
-    /* ========== 顶部导航栏 ========== */
     .app-nav {
       background: rgba(20, 20, 30, 0.65);
       backdrop-filter: blur(12px);
