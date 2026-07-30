@@ -1,130 +1,547 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <link rel="icon" href="docs/netease.png">
-  <title>网易云音乐 API Enhanced</title>
-  <style>
-    :root {
-      --fg: #333;
-      --muted: #666;
-      --border: #ddd;
-      --bg: #f5f5f5;
-      --panel: #ffffff;
-      --accent: #333;
-    }
-    * { box-sizing: border-box; }
-    html, body { height: 100%; }
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: var(--fg); background: var(--bg); line-height: 1.6; }
-    .container { max-width: 960px; margin: 40px auto; padding: 0 20px; }
-    @media (max-width: 480px) {
-      .container { margin: 20px auto; padding: 0 16px; }
-      header.site-header h1 { font-size: 22px; }
-      .block { padding: 16px; }
-    }
-    header.site-header { margin-bottom: 24px; }
-    header.site-header h1 { font-size: 28px; font-weight: 600; margin: 0; }
-    .badge { display: inline-block; margin-left: 8px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 12px; font-size: 12px; color: var(--muted); }
-    .sub { margin-top: 8px; color: var(--muted); font-size: 14px; }
-    .block { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05); }
-    .block h2 { margin: 0 0 12px; font-size: 18px; font-weight: 600; }
-    .kvs { display: grid; grid-template-columns: 100px 1fr; gap: 8px 12px; align-items: start; }
-    .kvs div:first-child { color: var(--muted); flex-shrink: 0; }
-    .kvs div:last-child { word-break: break-all; overflow-wrap: anywhere; min-width: 0; overflow: hidden; }
-    @media (max-width: 480px) {
-      .kvs { grid-template-columns: 1fr; gap: 4px 12px; }
-      .kvs div:first-child { font-weight: 500; }
-    }
-    ul.links { list-style: none; padding: 0; margin: 0; }
-    ul.links li { margin: 8px 0; }
-    ul.links a { color: var(--fg); text-decoration: none; border-bottom: 1px dotted var(--border); transition: all 0.2s ease; }
-    ul.links a:hover { color: var(--accent); border-bottom-color: var(--accent); }
-    pre { margin: 0; background: #f9f9f9; border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
-    code { font-family: 'Courier New', monospace; font-size: 13px; }
-    @media (max-width: 480px) {
-      code { font-size: 12px; }
-    }
-    footer.site-footer { margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); text-align: center; }
-    footer.site-footer a { color: var(--fg); text-decoration: none; transition: color 0.2s ease; }
-    footer.site-footer a:hover { color: var(--accent); }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <link rel="icon" href="docs/netease.png">
+    <title>Sanwith的网易云音乐API</title>
+    <style>
+        :root {
+            --fg: #ffffff;
+            --muted: rgba(255, 255, 255, 0.7);
+            --card-bg: rgba(255, 255, 255, 0.09);
+            --card-border: rgba(255, 255, 255, 0.15);
+            --btn-bg: rgba(255, 255, 255, 0.12);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+        html,
+        body {
+            height: 100%;
+        }
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: var(--fg);
+            background: #0a0a0c;
+            line-height: 1.6;
+            position: relative;
+            overflow-x: hidden;
+            background-image: url('https://p26-flow-imagex-sign.byteimg.com/tos-cn-i-a9rns2rl98/432ea38e891e4d609fd380be818286e3.jpg~tplv-a9rns2rl98-image.png?lk3s=8e244e95&rcl=20260731031725269C2FFE3BC717CC2884&rrcfp=dafada99&x-expires=2101663045&x-signature=s6KntYPO6hjEuAYbm3RAdfvx%2FQ0%3D');
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+            background-repeat: no-repeat;
+        }
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.6);
+        }
+        .container {
+            max-width: 960px;
+            margin: 40px auto;
+            padding: 0 20px;
+            position: relative;
+            z-index: 1;
+        }
+        @media (max-width: 480px) {
+            .container { margin: 20px auto; padding: 0 16px; }
+            header.site-header h1 { font-size: 22px; }
+            .block { padding: 16px; }
+        }
+        header.site-header {
+            margin-bottom: 24px;
+            z-index: 1;
+            user-select: none;
+        }
+        header.site-header h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin: 0;
+            color: #ffffff;
+            text-shadow: 0 0 30px rgba(255, 255, 255, 0.2);
+        }
+        .badge {
+            display: inline-block;
+            margin-left: 8px;
+            padding: 4px 10px;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 12px;
+            font-size: 12px;
+            color: rgba(255,255,255,0.85);
+            background: rgba(255,255,255,0.08);
+            vertical-align: middle;
+            letter-spacing: 0.03em;
+        }
+        .sub {
+            margin-top: 8px;
+            color: rgba(255,255,255,0.7);
+            font-size: 14px;
+        }
+
+        /* 卡片：背景2px高斯模糊 */
+        .block {
+            position: relative;
+            z-index: 1;
+            background: var(--card-bg);
+            backdrop-filter: blur(2px);
+            -webkit-backdrop-filter: blur(2px);
+            border: 1px solid var(--card-border);
+            border-radius: 14px;
+            padding: 22px 24px;
+            margin-bottom: 18px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.25);
+            transition: box-shadow 0.3s, border-color 0.3s, background 0.3s;
+            overflow: hidden;
+            user-select: none;
+            --mouse-x: 0.5;
+            --mouse-y: 0.5;
+            --light-opacity: 0;
+        }
+        .block:hover {
+            background: rgba(255, 255, 255, 0.14);
+            border-color: rgba(255,255,255,0.25);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.35), 0 0 15px rgba(255,255,255,0.05);
+        }
+        .block.pressed {
+            box-shadow: 0 6px 28px rgba(0,0,0,0.4), 0 0 25px rgba(255,255,255,0.1);
+            transition: box-shadow 0.15s ease;
+        }
+        .block h2 {
+            margin: 0 0 12px;
+            font-size: 18px;
+            font-weight: 600;
+            color: #ffffff;
+            letter-spacing: 0.02em;
+            position: relative;
+            z-index: 2;
+        }
+        .kvs {
+            display: grid;
+            grid-template-columns: 100px 1fr;
+            gap: 8px 12px;
+            align-items: start;
+            position: relative;
+            z-index: 2;
+        }
+        .kvs div:first-child {
+            color: rgba(255,255,255,0.6);
+            font-weight: 500;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 0.03em;
+        }
+        .kvs div:last-child {
+            word-break: break-all;
+            overflow-wrap: anywhere;
+            color: #ffffff;
+        }
+        @media (max-width: 480px) {
+            .kvs { grid-template-columns: 1fr; gap: 4px 12px; }
+        }
+        ul.links {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            position: relative;
+            z-index: 2;
+        }
+        ul.links li { margin: 8px 0; }
+        ul.links a {
+            color: #ffffff;
+            text-decoration: none;
+            border-bottom: 1px dotted rgba(255,255,255,0.4);
+            transition: all 0.25s ease;
+            padding-bottom: 1px;
+        }
+        ul.links a:hover {
+            border-bottom-color: #fff;
+            border-bottom-style: solid;
+            text-shadow: 0 0 12px rgba(255,255,255,0.4);
+        }
+        ul.links a code {
+            color: rgba(255,255,255,0.9);
+            background: rgba(255,255,255,0.08);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            border: 1px solid rgba(255,255,255,0.15);
+        }
+        pre {
+            margin: 0;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            padding: 14px 16px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            position: relative;
+            z-index: 2;
+        }
+        code {
+            font-family: 'SF Mono', 'Courier New', 'Consolas', monospace;
+            font-size: 13px;
+            color: #e0e0e0;
+        }
+        @media (max-width: 480px) { code { font-size: 12px; } }
+
+        /* 按钮网格：加深背景，独立放大 */
+        .debug-links-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px 12px;
+            margin-top: 10px;
+            line-height: 1.8;
+            position: relative;
+            z-index: 2;
+        }
+        @media (max-width: 700px) { .debug-links-grid { grid-template-columns: repeat(3, 1fr); } }
+        @media (max-width: 480px) {
+            .debug-links-grid { grid-template-columns: repeat(2, 1fr); gap: 4px 8px; }
+        }
+        .debug-links-grid a {
+            display: block;
+            color: rgba(255,255,255,0.9);
+            text-decoration: none;
+            border-bottom: 1px solid rgba(255,255,255,0.3);
+            padding: 6px 8px;
+            border-radius: 6px;
+            white-space: nowrap;
+            text-align: center;
+            font-size: 13px;
+            background: var(--btn-bg);
+            transition: transform 0.25s, background 0.25s, border-color 0.25s, box-shadow 0.25s;
+            letter-spacing: 0.02em;
+        }
+        .debug-links-grid a:hover {
+            transform: scale(1.08);
+            background: rgba(255,255,255,0.22);
+            border-bottom-color: #fff;
+            box-shadow: 0 0 12px rgba(255,255,255,0.25);
+            text-shadow: 0 0 8px rgba(255,255,255,0.4);
+        }
+        .debug-links-grid a:active {
+            transform: scale(1.02);
+            background: rgba(255,255,255,0.32);
+            box-shadow: 0 0 20px rgba(255,255,255,0.4);
+            transition: transform 0.1s, background 0.1s, box-shadow 0.1s;
+        }
+
+        .block>p>a {
+            color: #fff;
+            text-decoration: none;
+            border-bottom: 1px dotted rgba(255,255,255,0.45);
+            transition: 0.25s;
+            position: relative;
+            z-index: 2;
+        }
+        .block>p>a:hover {
+            border-bottom-color: #fff;
+            text-shadow: 0 0 12px rgba(255,255,255,0.4);
+        }
+
+        footer.site-footer {
+            position: relative;
+            z-index: 1;
+            margin-top: 24px;
+            padding-top: 14px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            color: rgba(255,255,255,0.55);
+            text-align: center;
+            font-size: 14px;
+            user-select: none;
+        }
+        footer.site-footer a {
+            color: #fff;
+            text-decoration: none;
+            border-bottom: 1px dotted rgba(255,255,255,0.3);
+            transition: 0.25s;
+        }
+        footer.site-footer a:hover {
+            border-bottom-color: #fff;
+            text-shadow: 0 0 10px rgba(255,255,255,0.35);
+        }
+
+        /* 鼠标光晕跟随 */
+        .block::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            pointer-events: none;
+            z-index: 1;
+            background: radial-gradient(circle 160px at calc(var(--mouse-x) * 100%) calc(var(--mouse-y) * 100%),
+                    rgba(255,255,255,0.18) 0%,
+                    rgba(255,255,255,0.04) 50%,
+                    rgba(255,255,255,0) 75%);
+            opacity: var(--light-opacity);
+            transition: opacity 0.2s ease;
+        }
+        .block.pressed::before {
+            background: radial-gradient(circle 220px at calc(var(--mouse-x) * 100%) calc(var(--mouse-y) * 100%),
+                    rgba(255,255,255,0.28) 0%,
+                    rgba(255,255,255,0.08) 40%,
+                    rgba(255,255,255,0) 70%);
+        }
+
+        /* 扩散波纹 */
+        .ripple-light {
+            position: absolute;
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 0;
+            background: radial-gradient(circle, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0) 70%);
+            animation: rippleOut 0.7s ease-out forwards;
+        }
+        @keyframes rippleOut {
+            0% { transform: translate(-50%, -50%) scale(0.2); opacity: 0.9; }
+            100% { transform: translate(-50%, -50%) scale(2.5); opacity: 0; }
+        }
+
+        .selectable {
+            user-select: text !important;
+            cursor: text;
+        }
+
+        [data-tooltip] {
+            position: relative;
+            cursor: pointer;
+        }
+        [data-tooltip]:hover::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: calc(100% + 8px);
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(30,30,30,0.92);
+            color: #fff;
+            font-size: 12px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            white-space: nowrap;
+            pointer-events: none;
+            z-index: 100;
+            border: 1px solid rgba(255,255,255,0.2);
+            box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+            animation: tooltipIn 0.2s ease-out;
+        }
+        @keyframes tooltipIn {
+            from { opacity: 0; transform: translateX(-50%) translateY(4px); }
+            to { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+    </style>
 </head>
 <body>
-  <main class="container">
-    <header class="site-header">
-      <h1>网易云音乐 API Enhanced <span id="api-version" class="badge"></span></h1>
-      <p class="sub">🔍 A revival project for NeteaseCloudMusicApi Node.js Api Services || 网易云音乐 API 备份 + 增强 || 本项目自原版v4.28.0版本后开始自行维护</p>
-    </header>
+    <main class="container">
+        <header class="site-header">
+            <h1>Sanwith的网易云音乐API<span class="badge">v4.39.0</span></h1>
+            <p class="sub">简易自用API</p>
+        </header>
 
-    <section class="block">
-      <h2>状态</h2>
-      <div class="kvs">
-        <div>Base URL</div><div id="base-url">—</div>
-        <div>当前页</div><div id="current-url">—</div>
-      </div>
-    </section>
+        <section class="block">
+            <h2>状态</h2>
+            <div class="kvs">
+                <div>Base URL</div>
+                <div id="base-url" class="selectable">—</div>
+                <div>当前页</div>
+                <div id="current-url" class="selectable">—</div>
+            </div>
+        </section>
 
-    <section class="block">
-      <h2>文档</h2>
-      <p><a href="/docs" target="_blank">查看在线文档</a></p>
-    </section>
+        <section class="block">
+            <h2>文档</h2>
+            <p><a href="/docs" target="_blank" data-tooltip="查看 Swagger 在线文档">查看在线文档</a></p>
+        </section>
 
-    <section class="block">
-      <h2>常用接口</h2>
-      <ul class="links">
-        <li><a href="/search?keywords=妖精小姐的魔法邀约">搜索音乐: <code>GET /search</code></a></li>
-        <li><a href="/song/detail?ids=2756058128">获取音乐详情: <code>GET /song/detail</code></a></li>
-        <li><a href="/comment/music?id=2756058128&limit=1">获取音乐评论: <code>GET /comment/music</code></a></li>
-        <li><a href="/song/url/v1?id=2756058128&level=exhigh">获取音乐播放链接: <code>GET /song/url/v1</code></a></li>
-      </ul>
-    </section>
+        <section class="block">
+            <h2>常用接口</h2>
+            <ul class="links">
+                <li><a href="/search?keywords=妖精小姐的魔法邀约" data-tooltip="搜索歌曲 / 专辑 / 艺人">搜索音乐: <code>GET /search</code></a></li>
+                <li><a href="/song/detail?ids=2756058128" data-tooltip="获取歌曲详细信息">获取音乐详情: <code>GET /song/detail</code></a></li>
+                <li><a href="/comment/music?id=2756058128&limit=1" data-tooltip="获取热门评论">获取音乐评论: <code>GET /comment/music</code></a></li>
+                <li><a href="/song/url/v1?id=2756058128&level=exhigh" data-tooltip="获取播放链接（exhigh 音质）">获取音乐播放链接: <code>GET /song/url/v1</code></a></li>
+            </ul>
+        </section>
 
-    <section class="block">
-      <h2>调试部分</h2>
-      <pre><code>curl -s {origin}/inner/version
+        <section class="block">
+            <h2>调试部分</h2>
+            <pre><code class="selectable">curl -s {origin}/inner/version
 curl -s {origin}/search?keywords=网易云</code></pre>
-      <div style="margin-top:10px; line-height:2;">
-        <a href="/api.html">交互式调试</a> ·
-        <a href="/qrlogin.html">二维码登录示例</a> ·
-        <a href="/unblock_test.html">解灰测试</a> ·
-        <a href="/audio_match_demo/index.html">听歌识曲 Demo</a> ·
-        <a href="/cloud.html">云盘上传</a> ·
-        <a href="/playlist_import.html">歌单导入</a> ·
-        <a href="/api_decrypt.html">API 解密</a> ·
-        <a href="/listen_together_host.html">一起听示例</a> ·
-        <a href="/playlist_cover_update.html">更新歌单封面示例</a> ·
-        <a href="/avatar_update.html">头像更新示例</a> ·
-        <a href="/scrobble.html">听歌打卡示例</a> ·
-        <a href="/yidun.html">获取 CheckToken</a> ·
-        <a href="/free_listen.html">免费听权益</a> ·
-        <a href="/ugc.html">云小编任务中心</a> ·
-        <a href="/ugc_lottery.html">云小编每日抽奖</a>
-      </div>
-    </section>
+            <div class="debug-links-grid">
+                <a href="/api.html" data-tooltip="在线调试 API 接口">交互式调试</a>
+                <a href="/qrlogin.html" data-tooltip="扫码登录获取 Cookie">二维码登录示例</a>
+                <a href="/unblock_test.html" data-tooltip="测试灰色歌曲解锁">解灰测试</a>
+                <a href="/audio_match_demo/index.html" data-tooltip="音频指纹识别歌曲">听歌识曲 Demo</a>
+                <a href="/cloud.html" data-tooltip="上传音乐到云盘">云盘上传</a>
+                <a href="/playlist_import.html" data-tooltip="批量导入歌单">歌单导入</a>
+                <a href="/api_decrypt.html" data-tooltip="解密 API 响应数据">API 解密</a>
+                <a href="/listen_together_host.html" data-tooltip="创建一起听房间">一起听示例</a>
+                <a href="/playlist_cover_update.html" data-tooltip="自定义歌单封面">更新歌单封面示例</a>
+                <a href="/avatar_update.html" data-tooltip="更换用户头像">头像更新示例</a>
+                <a href="/scrobble.html" data-tooltip="上报听歌记录">听歌打卡示例</a>
+                <a href="/yidun.html" data-tooltip="获取网易易盾验证 Token">获取 CheckToken</a>
+                <a href="/free_listen.html" data-tooltip="领取免费听歌权益">免费听权益</a>
+                <a href="/ugc.html" data-tooltip="云小编任务中心">云小编任务中心</a>
+                <a href="/ugc_lottery.html" data-tooltip="云小编每日抽奖">云小编每日抽奖</a>
+            </div>
+        </section>
 
-    <footer class="site-footer">
-      <a href="https://github.com/neteasecloudmusicapienhanced/api-enhanced" target="_blank">GitHub</a>
-    </footer>
-  </main>
+        <footer class="site-footer">
+            <a href="https://github.com/neteasecloudmusicapienhanced/api-enhanced" target="_blank">GitHub</a>
+        </footer>
+    </main>
 
-  <script>
-    document.addEventListener('DOMContentLoaded', function () {
-      var origin = window.location.origin;
-      document.getElementById('base-url').textContent = origin;
-      document.getElementById('current-url').textContent = window.location.href;
+    <script>
+        (function() {
+            // 禁用右键
+            document.addEventListener('contextmenu', e => e.preventDefault());
 
-      fetch('/inner/version', { method: 'POST' })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-          var v = data && data.data && data.data.version;
-          if (v) document.getElementById('api-version').textContent = 'v' + v;
-          var pre = document.querySelector('pre code');
-          if (pre) pre.textContent = pre.textContent.replace(/\{origin\}/g, origin);
-        })
-        .catch(function () {});
-    });
-  </script>
+            let lastMouseX = 0;
+            let lastMouseY = 0;
+            let hoveredBlock = null;
+
+            function updateBlockLight(block, clientX, clientY) {
+                const rect = block.getBoundingClientRect();
+                const x = (clientX - rect.left) / rect.width;
+                const y = (clientY - rect.top) / rect.height;
+                block.style.setProperty('--mouse-x', Math.max(0, Math.min(1, x)));
+                block.style.setProperty('--mouse-y', Math.max(0, Math.min(1, y)));
+            }
+
+            function isInsideBlock(block, clientX, clientY) {
+                const rect = block.getBoundingClientRect();
+                return clientX >= rect.left && clientX <= rect.right &&
+                       clientY >= rect.top && clientY <= rect.bottom;
+            }
+
+            // 修复后的位置计算：相对于卡片 padding box 左上角
+            function getRelativePos(block, clientX, clientY) {
+                const rect = block.getBoundingClientRect();
+                const style = window.getComputedStyle(block);
+                const borderLeft = parseFloat(style.borderLeftWidth) || 0;
+                const borderTop = parseFloat(style.borderTopWidth) || 0;
+                // 不需要减去padding，因为ripple是相对于padding box定位
+                return {
+                    x: clientX - rect.left - borderLeft,
+                    y: clientY - rect.top - borderTop
+                };
+            }
+
+            document.addEventListener('mousemove', function(e) {
+                lastMouseX = e.clientX;
+                lastMouseY = e.clientY;
+                const blocks = document.querySelectorAll('.block');
+                let found = null;
+                blocks.forEach(block => {
+                    if (isInsideBlock(block, lastMouseX, lastMouseY)) {
+                        found = block;
+                        if (hoveredBlock !== block) {
+                            if (hoveredBlock) hoveredBlock.style.setProperty('--light-opacity', '0');
+                            block.style.setProperty('--light-opacity', '1');
+                            hoveredBlock = block;
+                        }
+                        updateBlockLight(block, lastMouseX, lastMouseY);
+                    }
+                });
+                if (!found && hoveredBlock) {
+                    hoveredBlock.style.setProperty('--light-opacity', '0');
+                    hoveredBlock = null;
+                }
+            });
+
+            window.addEventListener('scroll', function() {
+                if (!hoveredBlock) return;
+                if (isInsideBlock(hoveredBlock, lastMouseX, lastMouseY)) {
+                    updateBlockLight(hoveredBlock, lastMouseX, lastMouseY);
+                } else {
+                    hoveredBlock.style.setProperty('--light-opacity', '0');
+                    hoveredBlock = null;
+                }
+            }, { passive: true });
+
+            const blocks = document.querySelectorAll('.block');
+            blocks.forEach(block => {
+                block.style.setProperty('--mouse-x', '0.5');
+                block.style.setProperty('--mouse-y', '0.5');
+                block.style.setProperty('--light-opacity', '0');
+
+                block.addEventListener('mousedown', function(e) {
+                    block.classList.add('pressed');
+                    updateBlockLight(block, e.clientX, e.clientY);
+                });
+
+                block.addEventListener('mouseup', function(e) {
+                    if (block.classList.contains('pressed')) {
+                        block.classList.remove('pressed');
+                        const pos = getRelativePos(block, e.clientX, e.clientY);
+                        const ripple = document.createElement('span');
+                        ripple.className = 'ripple-light';
+                        ripple.style.left = pos.x + 'px';
+                        ripple.style.top = pos.y + 'px';
+                        const rect = block.getBoundingClientRect();
+                        const size = Math.min(rect.width, rect.height) * 0.6;
+                        ripple.style.width = ripple.style.height = size + 'px';
+                        block.appendChild(ripple);
+                        ripple.addEventListener('animationend', () => ripple.remove());
+                    }
+                });
+
+                block.addEventListener('mouseleave', function() {
+                    if (block.classList.contains('pressed')) {
+                        block.classList.remove('pressed');
+                    }
+                });
+
+                block.addEventListener('touchstart', function(e) {
+                    e.preventDefault();
+                    block.classList.add('pressed');
+                    const touch = e.touches[0];
+                    updateBlockLight(block, touch.clientX, touch.clientY);
+                    block.style.setProperty('--light-opacity', '1');
+                }, { passive: false });
+
+                block.addEventListener('touchmove', function(e) {
+                    if (block.classList.contains('pressed')) {
+                        updateBlockLight(block, e.touches[0].clientX, e.touches[0].clientY);
+                    }
+                });
+
+                block.addEventListener('touchend', function(e) {
+                    if (block.classList.contains('pressed')) {
+                        block.classList.remove('pressed');
+                        block.style.setProperty('--light-opacity', '0');
+                        const rect = block.getBoundingClientRect();
+                        const lastX = parseFloat(block.style.getPropertyValue('--mouse-x')) * rect.width;
+                        const lastY = parseFloat(block.style.getPropertyValue('--mouse-y')) * rect.height;
+                        const pos = getRelativePos(block, lastX + rect.left, lastY + rect.top);
+                        const ripple = document.createElement('span');
+                        ripple.className = 'ripple-light';
+                        ripple.style.left = pos.x + 'px';
+                        ripple.style.top = pos.y + 'px';
+                        const size = Math.min(rect.width, rect.height) * 0.6;
+                        ripple.style.width = ripple.style.height = size + 'px';
+                        block.appendChild(ripple);
+                        ripple.addEventListener('animationend', () => ripple.remove());
+                    }
+                });
+            });
+
+            document.addEventListener('DOMContentLoaded', function() {
+                const origin = window.location.origin;
+                document.getElementById('base-url').textContent = origin;
+                document.getElementById('current-url').textContent = window.location.href;
+                const pre = document.querySelector('pre code');
+                if (pre) pre.textContent = pre.textContent.replace(/\{origin\}/g, origin);
+            });
+        })();
+    </script>
 </body>
 </html>
