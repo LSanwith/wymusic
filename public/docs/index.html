@@ -106,31 +106,45 @@
     .markdown-section a:hover { border-bottom-color: #fff; text-shadow: 0 0 10px rgba(255,255,255,0.4); }
     .markdown-section strong { color: #fff; font-weight: 600; }
 
-    /* ===== 修复代码块与行内代码的背景和文字颜色 ===== */
-    .markdown-section code {
-      background: rgba(0, 0, 0, 0.75) !important;  /* 加深背景，确保不透明 */
-      color: #f0f0f0 !important;
-      padding: 3px 8px;
-      border-radius: 6px;
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      font-size: 0.9em;
+    /* ========== 内联代码强制覆盖（修复白底白字问题） ========== */
+    .markdown-section code,
+    .markdown-section p code,
+    .markdown-section li code,
+    .markdown-section td code,
+    .markdown-section span code,
+    .markdown-section blockquote code,
+    .markdown-section h1 code,
+    .markdown-section h2 code,
+    .markdown-section h3 code,
+    .markdown-section h4 code,
+    .markdown-section h5 code,
+    .markdown-section h6 code {
+      background: rgba(0, 0, 0, 0.55) !important;
+      color: #f8f8f8 !important;
+      padding: 3px 8px !important;
+      border-radius: 5px !important;
+      border: 1px solid rgba(255, 255, 255, 0.2) !important;
+      font-size: 0.9em !important;
+      font-family: 'SF Mono', 'Courier New', Consolas, monospace !important;
+      white-space: pre-wrap !important;
+      word-break: break-all !important;
     }
+
     .markdown-section pre {
-      background: rgba(0, 0, 0, 0.85) !important;  /* 更深的背景 */
+      background: rgba(0,0,0,0.5) !important;
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255,255,255,0.1);
       border-radius: 12px;
       padding: 16px 20px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     }
     .markdown-section pre code {
       background: transparent !important;
-      padding: 0;
-      border: none;
-      color: #e8e8e8;
+      padding: 0 !important;
+      border: none !important;
+      color: #e8e8e8 !important;
     }
-
     .markdown-section table {
       background: rgba(255,255,255,0.04);
       border-collapse: collapse;
