@@ -192,6 +192,31 @@ async function constructServer(moduleDefs) {
   const allowOrigins = parseCorsAllowOrigins(CORS_ALLOW_ORIGIN)
   app.set('trust proxy', true)
 
+  // ===== SKey 访问验证（保护页面，放行静态资源） =====
+  app.use((req, res, next) => {
+    // 静态资源直接放行（图片、图标、CSS、JS 等）
+    if (
+      req.path.startsWith('/docs/') ||
+      /\.(png|ico|jpg|jpeg|gif|css|js|woff|ttf|svg|json)$/i.test(req.path)
+    ) {
+      return next()
+    }
+
+    const VALID_KEY = process.env.SKey
+    // 未配置环境变量时返回错误，提示部署者检查
+    if (!VALID_KEY) {
+      return res.status(500).send('Server config error: SKey environment variable not set.')
+    }
+
+    const userKey = req.query.SKey
+    if (userKey === VALID_KEY) {
+      return next()
+    }
+
+    res.status(403).send('Access Denied: Invalid or missing SKey')
+  })
+  // ==================================================
+
   /**
    * Serving static files
    */
@@ -225,7 +250,6 @@ async function constructServer(moduleDefs) {
    */
   app.use((req, _, next) => {
     req.cookies = {}
-    //;(req.headers.cookie || '').split(/\s*;\s*/).forEach((pair) => { //  Polynomial regular expression //
     ;(req.headers.cookie || '').split(/;\s+|(?<!\s)\s+$/g).forEach((pair) => {
       let crack = pair.indexOf('=')
       if (crack < 1 || crack == pair.length - 1) return
@@ -284,8 +308,6 @@ async function constructServer(moduleDefs) {
     // Register the route.
     app.all(moduleDef.route, async (req, res) => {
       ;[req.query, req.body].forEach((item) => {
-        // item may be undefined (some environments / middlewares).
-        // Guard access to avoid "Cannot read properties of undefined (reading 'cookie')".
         if (item && typeof item.cookie === 'string') {
           item.cookie = cookieToJson(decode(item.cookie))
         }
