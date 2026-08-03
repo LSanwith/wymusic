@@ -1,3 +1,4 @@
+// middleware.js
 export function middleware(request) {
-  return new Response('中间件已拦截', { status: 403 });
+  return new Response('Middleware is working', { status: 403 });
 }
