@@ -192,6 +192,19 @@ async function constructServer(moduleDefs) {
   const allowOrigins = parseCorsAllowOrigins(CORS_ALLOW_ORIGIN)
   app.set('trust proxy', true)
 
+  // ===== 全局 CORS（允许跨域请求，适配 Scratch 等外部调用） =====
+  app.use((req, res, next) => {
+    res.set({
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'X-Requested-With, Content-Type, X-SKey, Authorization',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    })
+    if (req.method === 'OPTIONS') {
+      return res.status(204).end()
+    }
+    next()
+  })
+
   // ===== SKey API 密钥验证（优先 Header，兼容 Query） =====
   app.use((req, res, next) => {
     // 静态资源直接放行
@@ -234,7 +247,7 @@ async function constructServer(moduleDefs) {
    */
   app.use(express.static(path.join(__dirname, 'public')))
   /**
-   * CORS & Preflight request
+   * CORS & Preflight request (原有逻辑，保留用于更精细的控制)
    */
   app.use((req, res, next) => {
     if (req.path !== '/' && !req.path.includes('.')) {
