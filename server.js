@@ -192,9 +192,9 @@ async function constructServer(moduleDefs) {
   const allowOrigins = parseCorsAllowOrigins(CORS_ALLOW_ORIGIN)
   app.set('trust proxy', true)
 
-  // ===== SKey 访问验证（保护页面，放行静态资源） =====
+  // ===== SKey API 密钥验证（优先 Header，兼容 Query） =====
   app.use((req, res, next) => {
-    // 静态资源直接放行（图片、图标、CSS、JS 等）
+    // 静态资源直接放行
     if (
       req.path.startsWith('/docs/') ||
       /\.(png|ico|jpg|jpeg|gif|css|js|woff|ttf|svg|json)$/i.test(req.path)
@@ -203,19 +203,31 @@ async function constructServer(moduleDefs) {
     }
 
     const VALID_KEY = process.env.SKey
-    // 未配置环境变量时返回错误，提示部署者检查
     if (!VALID_KEY) {
-      return res.status(500).send('Server config error: SKey environment variable not set.')
+      return res.status(500).json({
+        code: 500,
+        message: 'Server config error: SKey environment variable not set.',
+      })
     }
 
-    const userKey = req.query.SKey
+    // 优先从自定义请求头 X-SKey 或 Authorization: Bearer <key> 获取
+    const headerKey =
+      req.headers['x-skey'] ||
+      req.headers['authorization']?.replace(/^Bearer\s+/i, '')
+    // 兼容旧的 URL 参数 ?SKey=xxx
+    const queryKey = req.query.SKey
+    const userKey = headerKey || queryKey
+
     if (userKey === VALID_KEY) {
       return next()
     }
 
-    res.status(403).send('Access Denied: Invalid or missing SKey')
+    res.status(403).json({
+      code: 403,
+      message: 'Invalid or missing API key',
+    })
   })
-  // ==================================================
+  // ======================================================
 
   /**
    * Serving static files
