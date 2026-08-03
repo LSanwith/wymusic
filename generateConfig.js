@@ -1,10 +1,10 @@
 const fs = require('fs')
 const path = require('path')
 const { register_anonimous } = require('./main')
-const { getXeapiPublicKey } = require('./util/xeapiKey')   // 这个依赖保留
+const { getXeapiPublicKey } = require('./util/xeapiKey')   // 只保留这个依赖
 const tmpPath = require('os').tmpdir()
 
-// 内联随机中国IP生成（代替 generateRandomChineseIP）
+// 内联随机中国 IP 生成
 function generateRandomChineseIP() {
   const prefixes = ['116', '117', '118', '119', '120', '121', '122', '123', '124', '125', '126', '127', '220', '221', '222', '223'];
   const a = prefixes[Math.floor(Math.random() * prefixes.length)];
@@ -20,7 +20,9 @@ async function generateConfig() {
     const res = await register_anonimous()
     const cookie = res.body.cookie
     if (cookie) {
-      const cookieObj = require('./util/index').cookieToJson(cookie)  // 用到 cookieToJson 时再 require
+      // 临时 require cookieToJson，避免启动时依赖 util/index 出错
+      const { cookieToJson } = require('./util/index')
+      const cookieObj = cookieToJson(cookie)
       fs.writeFileSync(
         path.resolve(tmpPath, 'anonymous_token'),
         cookieObj.MUSIC_A,
