@@ -192,7 +192,7 @@ async function constructServer(moduleDefs) {
   const allowOrigins = parseCorsAllowOrigins(CORS_ALLOW_ORIGIN)
   app.set('trust proxy', true)
 
-  // ===== 1. 全局 CORS（最先执行） =====
+  // ===== 1. 全局 CORS（最前） =====
   app.use((req, res, next) => {
     res.set({
       'Access-Control-Allow-Origin': '*',
@@ -307,6 +307,32 @@ async function constructServer(moduleDefs) {
       code: 403,
       message: 'Invalid or missing API key',
     })
+  })
+
+  // ===== 8. 手动覆盖 /search 路由（绕过损坏的原模块） =====
+  app.get('/search', async (req, res) => {
+    const { keywords, limit = 30, offset = 0, type = 1 } = req.query
+    if (!keywords) {
+      return res.status(400).json({ code: 400, message: 'keywords 参数必填' })
+    }
+
+    try {
+      const response = await request(
+        'POST',
+        'https://music.163.com/weapi/search/get',
+        {
+          s: keywords,
+          limit: Number(limit),
+          offset: Number(offset),
+          type: Number(type),
+        },
+        { crypto: 'weapi' }
+      )
+      res.status(200).json(response.body)
+    } catch (error) {
+      console.error('搜索失败：', error)
+      res.status(500).json({ code: 500, message: '搜索服务暂时不可用' })
+    }
   })
 
   /**
