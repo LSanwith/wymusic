@@ -54,6 +54,17 @@ const VERSION_CHECK_RESULT = {
  * }} ExpressExtension
  */
 
+/**
+ * Get the module definitions dynamically.
+ *
+ * @param {string} modulesPath The path to modules (JS).
+ * @param {Record<string, string>} [specificRoute] The specific route of specific modules.
+ * @param {boolean} [doRequire] If true, require() the module directly.
+ * Otherwise, print out the module path. Default to true.
+ * @returns {Promise<ModuleDefinition[]>} The module definitions.
+ *
+ * @example getModuleDefinitions("./module", {"album_new.js": "/album/create"})
+ */
 async function getModulesDefinitions(
   modulesPath,
   specificRoute,
@@ -73,53 +84,86 @@ async function getModulesDefinitions(
       const route = parseRoute(file)
       const modulePath = path.join(modulesPath, file)
       const module = doRequire ? require(modulePath) : modulePath
+
       return { identifier, route, module }
     })
 
   return modules
 }
 
+/**
+ * Check if the version of this API is latest.
+ *
+ * @returns {Promise<VersionCheckResult>} If true, this API is up-to-date;
+ * otherwise, this API should be upgraded and you would
+ * need to notify users to upgrade it manually.
+ */
 async function checkVersion() {
   return new Promise((resolve) => {
     exec('npm info NeteaseCloudMusicApiEnhanced version', (err, stdout) => {
       if (!err) {
         let version = stdout.trim()
+
+        /**
+         * @param {VERSION_CHECK_RESULT} status
+         */
         const resolveStatus = (status) =>
           resolve({
             status,
             ourVersion: packageJSON.version,
             npmVersion: version,
           })
+
         resolveStatus(
           packageJSON.version < version
             ? VERSION_CHECK_RESULT.NOT_LATEST
             : VERSION_CHECK_RESULT.LATEST,
         )
       } else {
-        resolve({ status: VERSION_CHECK_RESULT.FAILED })
+        resolve({
+          status: VERSION_CHECK_RESULT.FAILED,
+        })
       }
     })
   })
 }
 
 function parseCorsAllowOrigins(corsAllowOrigin) {
-  if (!corsAllowOrigin) return null
+  if (!corsAllowOrigin) {
+    return null
+  }
+
   const origins = corsAllowOrigin
     .split(',')
-    .map((o) => o.trim())
+    .map((origin) => origin.trim())
     .filter(Boolean)
+
   return origins.length > 0 ? origins : null
 }
 
 function getCorsAllowOrigin(allowOrigins, requestOrigin) {
-  if (!allowOrigins) return requestOrigin || '*'
-  if (allowOrigins.includes('*')) return '*'
-  if (requestOrigin && allowOrigins.includes(requestOrigin)) return requestOrigin
+  if (!allowOrigins) {
+    return requestOrigin || '*'
+  }
+
+  if (allowOrigins.includes('*')) {
+    return '*'
+  }
+
+  if (requestOrigin && allowOrigins.includes(requestOrigin)) {
+    return requestOrigin
+  }
+
   return null
 }
 
 function createConsoleSpinner(message = '启动中') {
-  if (!process.stdout.isTTY) return { stop() {} }
+  if (!process.stdout.isTTY) {
+    return {
+      stop() {},
+    }
+  }
+
   const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
   let index = 0
   process.stdout.write(`${frames[index]} ${message}...`)
@@ -127,6 +171,7 @@ function createConsoleSpinner(message = '启动中') {
     index = (index + 1) % frames.length
     process.stdout.write(`\r${frames[index]} ${message}...`)
   }, 80)
+
   return {
     stop() {
       clearInterval(timer)
@@ -136,43 +181,56 @@ function createConsoleSpinner(message = '启动中') {
 }
 
 /**
- * 判断请求路径是否属于 API 路由（需要 SKey 保护）
- * 可以根据你的模块前缀进行扩展
+ * 判断是否为 API 路径（需要 SKey 保护）
+ * 策略：排除静态文件扩展名和 /docs 前缀，其余均视为 API
  */
 function isApiPath(pathname) {
-  // 排除静态文件扩展名和常见非 API 路径
-  if (/\.(ico|png|jpg|jpeg|gif|css|js|woff|ttf|svg|json|html?)$/i.test(pathname)) return false
-  // 这里可以列出你所有的 API 前缀，简单起见，只要不是静态文件且不是 /docs 等特殊页面，都视为 API
-  // 如果你希望更精确，可修改为正则匹配 /search, /song 等
-  return !pathname.startsWith('/docs') && pathname !== '/'
+  // 静态文件扩展名（无论大小写）
+  if (/\.(ico|png|jpg|jpeg|gif|css|js|woff|ttf|svg|json|html?)$/i.test(pathname)) {
+    return false
+  }
+  // 文档页面（如需更多公开页面可继续添加）
+  if (pathname.startsWith('/docs')) {
+    return false
+  }
+  // 其他路径全部视为 API，需要验证
+  return true
 }
 
+/**
+ * Construct the server of NCM API.
+ *
+ * @param {ModuleDefinition[]} [moduleDefs] Customized module definitions [advanced]
+ * @returns {Promise<import("express").Express>} The server instance.
+ */
 async function constructServer(moduleDefs) {
   const app = express()
   const { CORS_ALLOW_ORIGIN } = process.env
   const allowOrigins = parseCorsAllowOrigins(CORS_ALLOW_ORIGIN)
   app.set('trust proxy', true)
 
-  // ===== 1. 全局 CORS =====
+  // ===== 1. 全局 CORS（最先执行，确保所有响应都包含跨域头） =====
   app.use((req, res, next) => {
     res.set({
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Headers': 'X-Requested-With, Content-Type, X-SKey, Authorization',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     })
-    if (req.method === 'OPTIONS') return res.status(204).end()
+    if (req.method === 'OPTIONS') {
+      return res.status(204).end()
+    }
     next()
   })
 
-  /**
-   * 2. 静态文件服务（公开，不需要 SKey）
-   */
+  // ===== 2. 静态文件服务（公开，不验证 SKey） =====
   app.use(express.static(path.join(__dirname, 'public')))
 
-  // 3. 对不存在的静态文件直接返回 404，不让它们进入 SKey 验证
+  // ===== 3. 对非 API 且非静态资源的请求直接 404 =====
   app.use((req, res, next) => {
-    if (isApiPath(req.path)) return next()  // API 路径继续下一步验证
-    // 非 API 路径且静态文件未匹配，直接 404（避免被 SKey 拦截返回 403）
+    if (isApiPath(req.path)) {
+      return next()
+    }
+    // 已由 express.static 处理过的文件不会到达这里；到达这里的均为不存在的非 API 路径
     res.status(404).send('Not Found')
   })
 
@@ -186,33 +244,41 @@ async function constructServer(moduleDefs) {
       })
     }
 
-    // 从请求头或 URL 参数获取密钥
+    // 优先从自定义请求头 X-SKey 或 Authorization: Bearer <key> 获取
     const headerKey =
       req.headers['x-skey'] ||
       req.headers['authorization']?.replace(/^Bearer\s+/i, '')
+    // 兼容旧的 URL 参数 ?SKey=xxx
     const queryKey = req.query.SKey
     const userKey = headerKey || queryKey
 
-    if (userKey === VALID_KEY) {
-      // 验证通过后删除 SKey 参数，防止干扰业务模块
-      if (req.query.SKey) delete req.query.SKey
-      return next()
+    if (userKey !== VALID_KEY) {
+      return res.status(403).json({
+        code: 403,
+        message: 'Invalid or missing API key',
+      })
     }
 
-    res.status(403).json({
-      code: 403,
-      message: 'Invalid or missing API key',
-    })
+    // 验证通过，移除 SKey 参数，防止传入业务模块造成干扰
+    delete req.query.SKey
+    next()
   })
 
-  // ===== 原有的精细 CORS（保留） =====
+  /**
+   * CORS & Preflight request (原有精细控制，保留以处理更严格的跨域策略)
+   */
   app.use((req, res, next) => {
     if (req.path !== '/' && !req.path.includes('.')) {
-      const corsAllowOrigin = getCorsAllowOrigin(allowOrigins, req.headers.origin)
+      const corsAllowOrigin = getCorsAllowOrigin(
+        allowOrigins,
+        req.headers.origin,
+      )
       const shouldSetVaryHeader = corsAllowOrigin && corsAllowOrigin !== '*'
       res.set({
         'Access-Control-Allow-Credentials': true,
-        ...(corsAllowOrigin ? { 'Access-Control-Allow-Origin': corsAllowOrigin } : {}),
+        ...(corsAllowOrigin
+          ? { 'Access-Control-Allow-Origin': corsAllowOrigin }
+          : {}),
         ...(shouldSetVaryHeader ? { Vary: 'Origin' } : {}),
         'Access-Control-Allow-Headers': 'X-Requested-With,Content-Type',
         'Access-Control-Allow-Methods': 'PUT,POST,GET,DELETE,OPTIONS',
@@ -230,7 +296,9 @@ async function constructServer(moduleDefs) {
     ;(req.headers.cookie || '').split(/;\s+|(?<!\s)\s+$/g).forEach((pair) => {
       let crack = pair.indexOf('=')
       if (crack < 1 || crack == pair.length - 1) return
-      req.cookies[decode(pair.slice(0, crack)).trim()] = decode(pair.slice(crack + 1)).trim()
+      req.cookies[decode(pair.slice(0, crack)).trim()] = decode(
+        pair.slice(crack + 1),
+      ).trim()
     })
     next()
   })
@@ -242,11 +310,15 @@ async function constructServer(moduleDefs) {
   const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
   app.use(express.json({ limit: `${MAX_UPLOAD_SIZE_MB}mb` }))
-  app.use(express.urlencoded({ extended: false, limit: `${MAX_UPLOAD_SIZE_MB}mb` }))
+  app.use(
+    express.urlencoded({ extended: false, limit: `${MAX_UPLOAD_SIZE_MB}mb` }),
+  )
 
   app.use(
     fileUpload({
-      limits: { fileSize: MAX_UPLOAD_SIZE_BYTES },
+      limits: {
+        fileSize: MAX_UPLOAD_SIZE_BYTES,
+      },
       useTempFiles: true,
       tempFileDir: require('os').tmpdir(),
       abortOnLimit: true,
@@ -276,6 +348,7 @@ async function constructServer(moduleDefs) {
     (await getModulesDefinitions(path.join(__dirname, 'module'), special))
 
   for (const moduleDef of moduleDefinitions) {
+    // Register the route.
     app.all(moduleDef.route, async (req, res) => {
       ;[req.query, req.body].forEach((item) => {
         if (item && typeof item.cookie === 'string') {
@@ -303,22 +376,41 @@ async function constructServer(moduleDefs) {
             ip = global.cnIp
           } else {
             ip = req.ip
-            if (ip.substring(0, 7) == '::ffff:') ip = ip.substring(7)
-            if (ip == '::1') ip = global.cnIp
+
+            if (ip.substring(0, 7) == '::ffff:') {
+              ip = ip.substring(7)
+            }
+            if (ip == '::1') {
+              ip = global.cnIp
+            }
           }
 
-          obj[2] = { ...options, ip }
+          obj[2] = {
+            ...options,
+            ip,
+          }
+
           return request(...obj)
         })
-
         const displayCrypto = usedCrypto || (APP_CONF.encrypt ? 'eapi' : 'api')
-        logger.info(`Request Success: [${displayCrypto}] ${decode(req.originalUrl)}`)
+        logger.info(
+          `Request Success: [${displayCrypto}] ${decode(req.originalUrl)}`,
+        )
 
-        // 通用解锁逻辑
-        if (req.baseUrl === '/song/url/v1' && process.env.ENABLE_GENERAL_UNBLOCK === 'true') {
+        // 夹带私货部分：如果开启了通用解锁，并且是获取歌曲URL的接口，则尝试解锁（如果需要的话）ヾ(≧▽≦*)o
+        if (
+          req.baseUrl === '/song/url/v1' &&
+          process.env.ENABLE_GENERAL_UNBLOCK === 'true'
+        ) {
           const song = moduleResponse.body.data[0]
-          if (song.freeTrialInfo !== null || !song.url || [1, 4].includes(song.fee)) {
-            const { matchID } = require('@neteasecloudmusicapienhanced/unblockmusic-utils')
+          if (
+            song.freeTrialInfo !== null ||
+            !song.url ||
+            [1, 4].includes(song.fee)
+          ) {
+            const {
+              matchID,
+            } = require('@neteasecloudmusicapienhanced/unblockmusic-utils')
             logger.info('Starting unblock(uses general unblock):', req.query.id)
             const result = await matchID(req.query.id)
             song.url = result.data.url
@@ -328,7 +420,9 @@ async function constructServer(moduleDefs) {
           if (song.url && song.url.includes('kuwo')) {
             const proxy = process.env.PROXY_URL
             const useProxy = process.env.ENABLE_PROXY || 'false'
-            if (useProxy === 'true' && proxy) song.proxyUrl = proxy + song.url
+            if (useProxy === 'true' && proxy) {
+              song.proxyUrl = proxy + song.url
+            }
           }
         }
 
@@ -336,33 +430,43 @@ async function constructServer(moduleDefs) {
         if (!query.noCookie) {
           if (Array.isArray(cookies) && cookies.length > 0) {
             if (req.protocol === 'https') {
+              // Try to fix CORS SameSite Problem
               res.append(
                 'Set-Cookie',
-                cookies.map((c) => c + '; SameSite=None; Secure'),
+                cookies.map((cookie) => {
+                  return cookie + '; SameSite=None; Secure'
+                }),
               )
             } else {
               res.append('Set-Cookie', cookies)
             }
           }
         }
-
         if (moduleResponse.redirectUrl) {
           res.redirect(moduleResponse.status || 302, moduleResponse.redirectUrl)
           return
         }
 
         res.status(moduleResponse.status).send(moduleResponse.body)
-      } catch (moduleResponse) {
+      } catch (/** @type {*} */ moduleResponse) {
         logger.error(`${decode(req.originalUrl)}`, {
           status: moduleResponse.status,
           body: moduleResponse.body,
         })
         if (!moduleResponse.body) {
-          res.status(404).send({ code: 404, data: null, msg: 'Not Found' })
+          res.status(404).send({
+            code: 404,
+            data: null,
+            msg: 'Not Found',
+          })
           return
         }
-        if (moduleResponse.body.code == '301') moduleResponse.body.msg = '需要登录'
-        if (!query.noCookie) res.append('Set-Cookie', moduleResponse.cookie)
+        if (moduleResponse.body.code == '301')
+          moduleResponse.body.msg = '需要登录'
+        if (!query.noCookie) {
+          res.append('Set-Cookie', moduleResponse.cookie)
+        }
+
         res.status(moduleResponse.status).send(moduleResponse.body)
       }
     })
@@ -371,6 +475,11 @@ async function constructServer(moduleDefs) {
   return app
 }
 
+/**
+ * Serve the NCM API.
+ * @param {NcmApiOptions} options
+ * @returns {Promise<import('express').Express & ExpressExtension>}
+ */
 async function serveNcmApi(options) {
   const port = Number(options.port || process.env.PORT || '3000')
   const host = options.host || process.env.HOST || ''
@@ -381,15 +490,21 @@ async function serveNcmApi(options) {
     options.checkVersion &&
     checkVersion().then(({ npmVersion, ourVersion, status }) => {
       if (status == VERSION_CHECK_RESULT.NOT_LATEST) {
-        logger.warn(`最新版本: ${npmVersion}, 当前版本: ${ourVersion}, 请及时更新`)
+        logger.warn(
+          `最新版本: ${npmVersion}, 当前版本: ${ourVersion}, 请及时更新`,
+        )
       }
     })
   const constructServerSubmission = constructServer(options.moduleDefs)
 
-  const [_, app] = await Promise.all([checkVersionSubmission, constructServerSubmission])
+  const [_, app] = await Promise.all([
+    checkVersionSubmission,
+    constructServerSubmission,
+  ])
 
   spinner.stop()
 
+  /** @type {import('express').Express & ExpressExtension} */
   const appExt = app
   appExt.server = app.listen(port, host, () => {
     console.log(`
@@ -397,7 +512,9 @@ async function serveNcmApi(options) {
   ╠═╣╠═╝║    ║╣ ║║║╠═╣╠═╣║║║║  ║╣  ║║
   ╩ ╩╩  ╩    ╚═╝╝╚╝╩ ╩╩ ╩╝╚╝╚═╝╚═╝═╩╝
     `)
-    logger.info(`Server started successfully @ http://${host ? host : 'localhost'}:${port}`)
+    logger.info(
+      `Server started successfully @ http://${host ? host : 'localhost'}:${port}`,
+    )
   })
 
   return appExt
