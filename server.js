@@ -192,7 +192,7 @@ async function constructServer(moduleDefs) {
   const allowOrigins = parseCorsAllowOrigins(CORS_ALLOW_ORIGIN)
   app.set('trust proxy', true)
 
-  // ===== 全局 CORS（允许跨域请求，适配 Scratch 等外部调用） =====
+  // ===== 1. 全局 CORS（最前，保证所有响应都有 CORS 头） =====
   app.use((req, res, next) => {
     res.set({
       'Access-Control-Allow-Origin': '*',
@@ -205,16 +205,14 @@ async function constructServer(moduleDefs) {
     next()
   })
 
-  // ===== SKey API 密钥验证（优先 Header，兼容 Query） =====
-  app.use((req, res, next) => {
-    // 静态资源直接放行
-    if (
-      req.path.startsWith('/docs/') ||
-      /\.(png|ico|jpg|jpeg|gif|css|js|woff|ttf|svg|json)$/i.test(req.path)
-    ) {
-      return next()
-    }
+  /**
+   * 2. 静态文件服务（放在验证之前，静态资源直接返回，不经过密钥验证）
+   */
+  app.use(express.static(path.join(__dirname, 'public')))
 
+  // ===== 3. SKey API 密钥验证（只保护非静态文件的路由） =====
+  app.use((req, res, next) => {
+    // 静态文件已由上面的 express.static 处理，到达这里的请求都是非静态资源
     const VALID_KEY = process.env.SKey
     if (!VALID_KEY) {
       return res.status(500).json({
@@ -243,11 +241,7 @@ async function constructServer(moduleDefs) {
   // ======================================================
 
   /**
-   * Serving static files
-   */
-  app.use(express.static(path.join(__dirname, 'public')))
-  /**
-   * CORS & Preflight request (原有逻辑，保留用于更精细的控制)
+   * CORS & Preflight request (原有精细控制，保留用于更细致的匹配，但全局 CORS 已保证基本跨域)
    */
   app.use((req, res, next) => {
     if (req.path !== '/' && !req.path.includes('.')) {
