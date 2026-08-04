@@ -181,23 +181,6 @@ function createConsoleSpinner(message = '启动中') {
 }
 
 /**
- * 判断是否为 API 路径（需要 SKey 保护）
- * 策略：排除静态文件扩展名和 /docs 前缀，其余均视为 API
- */
-function isApiPath(pathname) {
-  // 静态文件扩展名（无论大小写）
-  if (/\.(ico|png|jpg|jpeg|gif|css|js|woff|ttf|svg|json|html?)$/i.test(pathname)) {
-    return false
-  }
-  // 文档页面（如需更多公开页面可继续添加）
-  if (pathname.startsWith('/docs')) {
-    return false
-  }
-  // 其他路径全部视为 API，需要验证
-  return true
-}
-
-/**
  * Construct the server of NCM API.
  *
  * @param {ModuleDefinition[]} [moduleDefs] Customized module definitions [advanced]
@@ -209,7 +192,7 @@ async function constructServer(moduleDefs) {
   const allowOrigins = parseCorsAllowOrigins(CORS_ALLOW_ORIGIN)
   app.set('trust proxy', true)
 
-  // ===== 1. 全局 CORS（最先执行，确保所有响应都包含跨域头） =====
+  // ===== 1. 全局 CORS（最先执行） =====
   app.use((req, res, next) => {
     res.set({
       'Access-Control-Allow-Origin': '*',
@@ -222,50 +205,13 @@ async function constructServer(moduleDefs) {
     next()
   })
 
-  // ===== 2. 静态文件服务（公开，不验证 SKey） =====
+  /**
+   * 2. 静态文件服务（公开）
+   */
   app.use(express.static(path.join(__dirname, 'public')))
 
-  // ===== 3. 对非 API 且非静态资源的请求直接 404 =====
-  app.use((req, res, next) => {
-    if (isApiPath(req.path)) {
-      return next()
-    }
-    // 已由 express.static 处理过的文件不会到达这里；到达这里的均为不存在的非 API 路径
-    res.status(404).send('Not Found')
-  })
-
-  // ===== 4. SKey 验证（仅保护 API 路径） =====
-  app.use((req, res, next) => {
-    const VALID_KEY = process.env.SKey
-    if (!VALID_KEY) {
-      return res.status(500).json({
-        code: 500,
-        message: 'Server config error: SKey environment variable not set.',
-      })
-    }
-
-    // 优先从自定义请求头 X-SKey 或 Authorization: Bearer <key> 获取
-    const headerKey =
-      req.headers['x-skey'] ||
-      req.headers['authorization']?.replace(/^Bearer\s+/i, '')
-    // 兼容旧的 URL 参数 ?SKey=xxx
-    const queryKey = req.query.SKey
-    const userKey = headerKey || queryKey
-
-    if (userKey !== VALID_KEY) {
-      return res.status(403).json({
-        code: 403,
-        message: 'Invalid or missing API key',
-      })
-    }
-
-    // 验证通过，移除 SKey 参数，防止传入业务模块造成干扰
-    delete req.query.SKey
-    next()
-  })
-
   /**
-   * CORS & Preflight request (原有精细控制，保留以处理更严格的跨域策略)
+   * 3. 原有 CORS & Preflight request (保留原有精细控制)
    */
   app.use((req, res, next) => {
     if (req.path !== '/' && !req.path.includes('.')) {
@@ -289,7 +235,7 @@ async function constructServer(moduleDefs) {
   })
 
   /**
-   * Cookie Parser
+   * 4. Cookie Parser
    */
   app.use((req, _, next) => {
     req.cookies = {}
@@ -304,7 +250,7 @@ async function constructServer(moduleDefs) {
   })
 
   /**
-   * Body Parser and File Upload
+   * 5. Body Parser and File Upload
    */
   const MAX_UPLOAD_SIZE_MB = 500
   const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
@@ -327,9 +273,41 @@ async function constructServer(moduleDefs) {
   )
 
   /**
-   * Cache
+   * 6. Cache
    */
   app.use(cache('2 minutes', (_, res) => res.statusCode === 200))
+
+  /**
+   * 7. SKey 验证（仅保护 API 路径）
+   */
+  app.use((req, res, next) => {
+    // 判断是否为静态文件或文档页面，这些不需要密钥
+    const isStaticFile = /\.(ico|png|jpg|jpeg|gif|css|js|woff|ttf|svg|json|html?)$/i.test(req.path)
+    if (isStaticFile || req.path.startsWith('/docs')) {
+      return next()
+    }
+
+    const VALID_KEY = process.env.SKey
+    if (!VALID_KEY) {
+      return next()
+    }
+
+    const headerKey =
+      req.headers['x-skey'] ||
+      req.headers['authorization']?.replace(/^Bearer\s+/i, '')
+    const queryKey = req.query.SKey
+    const userKey = headerKey || queryKey
+
+    if (userKey === VALID_KEY) {
+      delete req.query.SKey  // 移除，避免干扰业务模块
+      return next()
+    }
+
+    res.status(403).json({
+      code: 403,
+      message: 'Invalid or missing API key',
+    })
+  })
 
   /**
    * Special Routers
