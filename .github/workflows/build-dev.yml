@@ -1,9 +1,11 @@
 name: Build Artifacts
 
 on:
+  # 仅保留手动触发。
+  # 本项目用 Vercel 从源码直接部署，不需要每次 push 到 main 都构建三平台二进制包
+  # （Windows/macOS runner 是最贵的两档，且产物只是 Actions artifact，90 天过期）。
+  # 需要独立可执行文件时，在 Actions 页面选 "Build Artifacts" → Run workflow 即可。
   workflow_dispatch: # 手动触发
-  push:
-    branches: [main]
 
 jobs:
   build:

@@ -27,10 +27,19 @@
             position: relative;
             overflow-x: hidden;
             overflow-y: auto;
-            background-image: url('https://p26-flow-imagex-sign.byteimg.com/tos-cn-i-a9rns2rl98/432ea38e891e4d609fd380be818286e3.jpg~tplv-a9rns2rl98-image.png?lk3s=8e244e95&rcl=20260731031725269C2FFE3BC717CC2884&rrcfp=dafada99&x-expires=2101663045&x-signature=s6KntYPO6hjEuAYbm3RAdfvx%2FQ0%3D');
+        }
+        /* 背景图：改为本地文件 + 独立固定层。
+           原先用 background-attachment: fixed，移动端滚动时每帧都要重绘整屏背景，是典型卡顿源；
+           换成 position: fixed 的独立图层后视觉效果完全一致（背景固定、不随内容滚动），但没有该开销。 */
+        html::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            pointer-events: none;
+            background-image: url('bg.jpg');
             background-size: cover;
             background-position: center;
-            background-attachment: fixed;
             background-repeat: no-repeat;
         }
         body::before {
@@ -430,27 +439,35 @@ curl -s {origin}/search?keywords=网易云</code></pre>
                 };
             }
 
+            /* 鼠标光效：原来每个 mousemove 事件都要 querySelectorAll + 多次 getBoundingClientRect，
+               高刷鼠标下每秒可触发几百次并强制重排（直接拖累 INP）。
+               改为每帧最多计算一次，并复用下面已缓存的 .block 列表；视觉表现不变。 */
+            let lightFrameQueued = false;
             document.addEventListener('mousemove', function(e) {
                 lastMouseX = e.clientX;
                 lastMouseY = e.clientY;
-                const blocks = document.querySelectorAll('.block');
-                let found = null;
-                blocks.forEach(block => {
-                    if (isInsideBlock(block, lastMouseX, lastMouseY)) {
-                        found = block;
-                        if (hoveredBlock !== block) {
-                            if (hoveredBlock) hoveredBlock.style.setProperty('--light-opacity', '0');
-                            block.style.setProperty('--light-opacity', '1');
-                            hoveredBlock = block;
+                if (lightFrameQueued) return;
+                lightFrameQueued = true;
+                requestAnimationFrame(function() {
+                    lightFrameQueued = false;
+                    let found = null;
+                    blocks.forEach(block => {
+                        if (isInsideBlock(block, lastMouseX, lastMouseY)) {
+                            found = block;
+                            if (hoveredBlock !== block) {
+                                if (hoveredBlock) hoveredBlock.style.setProperty('--light-opacity', '0');
+                                block.style.setProperty('--light-opacity', '1');
+                                hoveredBlock = block;
+                            }
+                            updateBlockLight(block, lastMouseX, lastMouseY);
                         }
-                        updateBlockLight(block, lastMouseX, lastMouseY);
+                    });
+                    if (!found && hoveredBlock) {
+                        hoveredBlock.style.setProperty('--light-opacity', '0');
+                        hoveredBlock = null;
                     }
                 });
-                if (!found && hoveredBlock) {
-                    hoveredBlock.style.setProperty('--light-opacity', '0');
-                    hoveredBlock = null;
-                }
-            });
+            }, { passive: true });
 
             window.addEventListener('scroll', function() {
                 if (!hoveredBlock) return;
@@ -538,5 +555,11 @@ curl -s {origin}/search?keywords=网易云</code></pre>
             });
         })();
     </script>
+
+    <!-- Vercel Speed Insights（免费版，采集真实用户的 Core Web Vitals；defer 异步加载，不阻塞渲染） -->
+    <script>
+        window.si = window.si || function () { (window.siq = window.siq || []).push(arguments); };
+    </script>
+    <script defer src="/_vercel/speed-insights/script.js"></script>
 </body>
 </html>
