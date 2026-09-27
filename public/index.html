@@ -577,6 +577,11 @@ curl -s {origin}/search?keywords=网易云</code></pre>
          玻璃层 pointer-events:none，不抢任何事件。 -->
     <script>
         (function() {
+            /* 组件一律使用它自己的默认预设 —— 这里只做「几何 + 结构」三件事：
+               setBox/setRadius 把玻璃对齐卡片的尺寸与圆角、clear+add 只留一块、
+               URL 上的 hud/bg/count 是嵌入所必需。
+               不要在这里加 refractPower / bezel / thickness / chroma / highlight /
+               tint 之类的观感参数覆写；要调就调组件本体。 */
             var SRC = 'liquid-glass.html?hud=0&bg=none&count=0';
 
             function initPanel(card) {
