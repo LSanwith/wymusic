@@ -744,6 +744,28 @@ function sampleRefractionMap(profile, maxDisp, mw, mh, width, height, borderRadi
   return rgba;
 }
 
+/**
+ * 元素宽高 → 斜面带宽 / 玻璃厚度（px）。
+ *
+ * ⚠️ 两者都按【短边】折算，不是长边。用长边是个坑：920×150 的扁卡片长边取 920，
+ * 默认 bezel 0.20 会得到 184px 的折射带 —— 比卡片本身还高，整片糊成横向彩虹条纹。
+ * 按短边（150）算就只有 30px，跟 160×160 的默认块比例一致（0.20 × 短边）。
+ * thickness 是加在「斜面高度 × 宽度」上的一个长度量，必须和 bezel 同一把尺子。
+ * 带宽再夹到短边的一半：再宽两侧的斜面就互相压过去了。
+ *
+ * 抽成独立纯函数是为了「只有一个地方定义这个几何」—— 之前 check-map-visual.js
+ * 自己又写了一遍 maxSide 版本，组件改了它没改，于是脚本算出来的带宽跟实际不符。
+ * 现在那边直接把这个函数抠出来调用，改不动的。
+ */
+function bezelGeometry(width, height, bezelFrac, thicknessFrac) {
+  const minSide = Math.min(width, height);
+  return {
+    minSide: minSide,
+    bezelWidth: Math.max(1.5, Math.min(minSide * bezelFrac, minSide * 0.5)),
+    thicknessPx: minSide * thicknessFrac
+  };
+}
+
 /* ==========================================================================
    2. 滤镜档位：按尺寸只生成一次，永久缓存
    ========================================================================== */
@@ -777,6 +799,30 @@ function mapRes(longSide) {
   const px = longSide / 2 * cfg.mapScale * t.scale;
   return Math.round(clamp(px, t.floor, t.cap));
 }
+
+/* 折射带至少要占多少个贴图像素。带内是平滑剖面，像素太少会被量化成台阶。 */
+const BAND_MIN_PX = 16;
+/* 贴图像素总量上限，防止极端长宽比把位移贴图撑爆内存 */
+const MAP_AREA_CAP = 65536;
+
+/** 由「长边档位 + 长宽比」算出贴图分辨率，并保证折射带分到足够的像素 */
+function mapDims(size, aspect) {
+  const t = tier();
+  let longRes = mapRes(size);
+  const shortRes = aspect >= 1 ? longRes / aspect : longRes * aspect;
+  // 折射带宽度 = 短边 × bezel，所以短边至少需要 BAND_MIN_PX / bezel 个像素
+  const need = (BAND_MIN_PX / Math.max(0.03, cfg.bezel)) * t.scale;
+  if (shortRes < need && shortRes > 0) longRes = Math.min(longRes * (need / shortRes), 4000);
+  let w = Math.max(8, Math.round(aspect >= 1 ? longRes : longRes * aspect));
+  let h = Math.max(8, Math.round(aspect >= 1 ? longRes / aspect : longRes));
+  const area = w * h;
+  if (area > MAP_AREA_CAP) {
+    const k = Math.sqrt(MAP_AREA_CAP / area);
+    w = Math.max(8, Math.round(w * k));
+    h = Math.max(8, Math.round(h * k));
+  }
+  return { w: w, h: h, long: Math.round(longRes) };
+}
 /** 把任意长边量化到最近的尺寸档 */
 function snapSize(longSide) {
   let best = SIZES[0], bd = Infinity;
@@ -805,10 +851,10 @@ function variantFor(width, height) {
     v = { key: key, size: size, aspect: parseFloat(aKey), built: false, dirty: true, rsW: 0, rsH: 0 };
     v.id = 'lgf-' + size + '-' + aKey.replace('.', '_');
     // 创建时就把贴图尺寸算出来，这样在滤镜真正建好之前读 v.rsW/v.rsH 也是有效值
-    const longRes = mapRes(size);
-    v.rsW = Math.max(8, Math.round(v.aspect >= 1 ? longRes : longRes * v.aspect));
-    v.rsH = Math.max(8, Math.round(v.aspect >= 1 ? longRes / v.aspect : longRes));
-    v.rs = longRes;
+    const dims = mapDims(size, v.aspect);
+    v.rsW = dims.w;
+    v.rsH = dims.h;
+    v.rs = dims.long;
     variantByKey[key] = v;
     variants.push(v);
   }
@@ -835,20 +881,16 @@ function buildFilter(v) {
 
   // 贴图分辨率：最长边取档位分辨率，另一边按长宽比等比缩放
   // （如果一律用正方形贴图，长条形状会被拉伸，斜面在短边方向糊掉）
-  const longRes = mapRes(size);
-  v.rsW = Math.max(8, Math.round(aspect >= 1 ? longRes : longRes * aspect));
-  v.rsH = Math.max(8, Math.round(aspect >= 1 ? longRes / aspect : longRes));
-  v.rs = longRes;                                   // 兼容旧字段（诊断脚本会读）
+  const dims = mapDims(size, aspect);
+  v.rsW = dims.w;
+  v.rsH = dims.h;
+  v.rs = dims.long;                                 // 兼容旧字段（诊断脚本会读）
 
-  /* 斜面宽度 / 玻璃厚度都按【短边】算，不是长边。
-     ⚠️ 用长边是个坑：920×150 的扁卡片长边取 920，默认 bezel 0.20 会得到 184px 的
-     折射带 —— 比卡片本身还高，整片糊成横向彩虹条纹。按短边（150）算就只有 30px，
-     跟 160×160 的默认块比例一致（0.20 × 短边）。
-     thickness 同理：它是加在「斜面高度 × 宽度」上的一个长度量，必须和 bezel 同一把尺子。
+  /* 斜面带宽 / 玻璃厚度都按【短边】算（见 bezelGeometry 的说明）。
      注意贴图分辨率仍然按长边算（见上面的 mapRes），那是像素密度，跟几何比例无关。 */
-  const minSide = Math.min(width, height);
-  const bezelWidth = Math.max(1.5, Math.min(minSide * cfg.bezel, minSide * 0.5));
-  const thicknessPx = minSide * cfg.thickness;
+  const bg = bezelGeometry(width, height, cfg.bezel, cfg.thickness);
+  const bezelWidth = bg.bezelWidth;
+  const thicknessPx = bg.thicknessPx;
   v.bezelPx = bezelWidth; v.thicknessPx = thicknessPx;   // 供调试/集成读取（见 config 出口）
   const profile = calculateDisplacementMap(thicknessPx, bezelWidth, SurfaceEquations.CONVEX.fn, 1.5, cfg.samples);
   let maxDisp = 0.1;
