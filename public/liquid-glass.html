@@ -474,10 +474,14 @@ const cfg = {
   height:       clamp(num(qs.get('h'), num(qs.get('size'), 160)), 24, 1200),
   radius:       clamp(num(qs.get('radius'), 9999), 0, 9999),   // 圆角 px，默认很大 = 胶囊/圆形
   sizeVary:     clamp(num(qs.get('vary'), 0.5), 0, 1),    // 尺寸随机差异（默认让大小有点变化）
+  /* 初始摆放角度上限（度）。0 = 全部正放。
+     ⚠️ 这里曾经写死 rand(-12,12)：那是给演示页「随手撒一把玻璃」用的，
+     嵌进别的页面时每块玻璃都会被转几度、跟卡片对不齐，所以改成受这个参数控制。 */
+  tilt:         clamp(num(qs.get('tilt'), 0), 0, 45),
   /* —— 折射 —— */
   refract:      bool(qs.get('refract'), true),           // 是否启用折射
   refractPower: clamp(num(qs.get('power'), 0.45), 0.02, 3),  // 折射强度
-  bezel:        clamp(num(qs.get('bezel'), 0.20), 0.03, 0.5),// 斜面宽度（占直径）
+  bezel:        clamp(num(qs.get('bezel'), 0.20), 0.03, 0.5),// 斜面宽度（占短边）
   thickness:    clamp(num(qs.get('thick'), 0.93), 0.1, 3),   // 玻璃厚度
   chroma:       clamp(num(qs.get('chroma'), 1), 0, 3),       // 色散强度
   mapScale:     clamp(num(qs.get('map'), 1.05), 0.4, 2),     // 采样率（贴图分辨率）
@@ -485,7 +489,7 @@ const cfg = {
   blur:         clamp(num(qs.get('blur'), 0), 0, 40),        // 折射之外额外模糊（px）
   tint:         qs.get('tint') || '#ffffff',                 // 玻璃染色（走滤镜）
   tintCss:      clamp(num(qs.get('tintcss'), 0.03), 0, 0.5), // 额外底色覆盖(DOM)
-  highlight:    clamp(num(qs.get('hi'), 1), 0, 2),           // 高光强度
+  highlight:    clamp(num(qs.get('hi'), 0.2), 0, 2),          // 高光强度
   /* —— 交互/动效 —— */
   repel:        bool(qs.get('repel'), false),
   tension:      bool(qs.get('tension'), false),
@@ -836,9 +840,17 @@ function buildFilter(v) {
   v.rsH = Math.max(8, Math.round(aspect >= 1 ? longRes / aspect : longRes));
   v.rs = longRes;                                   // 兼容旧字段（诊断脚本会读）
 
-  const maxSide = Math.max(width, height);
-  const bezelWidth = Math.max(1.5, maxSide * cfg.bezel);
-  const profile = calculateDisplacementMap(maxSide * cfg.thickness, bezelWidth, SurfaceEquations.CONVEX.fn, 1.5, cfg.samples);
+  /* 斜面宽度 / 玻璃厚度都按【短边】算，不是长边。
+     ⚠️ 用长边是个坑：920×150 的扁卡片长边取 920，默认 bezel 0.20 会得到 184px 的
+     折射带 —— 比卡片本身还高，整片糊成横向彩虹条纹。按短边（150）算就只有 30px，
+     跟 160×160 的默认块比例一致（0.20 × 短边）。
+     thickness 同理：它是加在「斜面高度 × 宽度」上的一个长度量，必须和 bezel 同一把尺子。
+     注意贴图分辨率仍然按长边算（见上面的 mapRes），那是像素密度，跟几何比例无关。 */
+  const minSide = Math.min(width, height);
+  const bezelWidth = Math.max(1.5, Math.min(minSide * cfg.bezel, minSide * 0.5));
+  const thicknessPx = minSide * cfg.thickness;
+  v.bezelPx = bezelWidth; v.thicknessPx = thicknessPx;   // 供调试/集成读取（见 config 出口）
+  const profile = calculateDisplacementMap(thicknessPx, bezelWidth, SurfaceEquations.CONVEX.fn, 1.5, cfg.samples);
   let maxDisp = 0.1;
   for (let i = 0; i < profile.length; i++) { const a = Math.abs(profile[i]); if (a > maxDisp) maxDisp = a; }
 
@@ -1081,12 +1093,17 @@ function makeOrb(x, y, width, height) {
   el.appendChild(pulse); el.appendChild(label);
   stage.appendChild(el);
 
+  /* angK 是 [-1,1] 的固定随机因子，实际角度 = angK × cfg.tilt。
+     这样把 tilt 拉到 0 时所有玻璃会「转正」而不是保持原来的随机角，
+     调 tilt 滑块时也是平滑放大/缩小，不会每次都重新随机（不会闪）。 */
+  const angK = rand(-1, 1);
   const o = {
     id: nextId++, el: el, glass: glass, v: v,
     w: w, h: h, r: Math.max(w, h) / 2,        // r 仅用于碰撞近似
     x: x, y: y, tx: x, ty: y, vx: 0, vy: 0, rx: 0, ry: 0,
     grab: false, grabDX: 0, grabDY: 0, dragged: false,
-    ang: rand(-12, 12), tint: TINT[(nextId - 1) % TINT.length]
+    angK: angK, ang: angK * cfg.tilt,
+    tint: TINT[(nextId - 1) % TINT.length]
   };
   orbs.push(o);
   syncCount();
@@ -1546,7 +1563,7 @@ function syncHudState() {
 }
 
 function publicState(o) {
-  return { id: o.id, x: o.x, y: o.y, r: o.r, width: o.w, height: o.h, size: Math.max(o.w, o.h), vx: o.vx, vy: o.vy, el: o.el, grabbed: o.grab };
+  return { id: o.id, x: o.x, y: o.y, r: o.r, width: o.w, height: o.h, size: Math.max(o.w, o.h), angle: o.ang, vx: o.vx, vy: o.vy, el: o.el, grabbed: o.grab };
 }
 
 const listeners = Object.create(null);
@@ -1576,6 +1593,7 @@ function applyParam(key, value, opts) {
   else if (key === 'width') cfg.width = clamp(num(value, cfg.width), 24, 1200);
   else if (key === 'height') cfg.height = clamp(num(value, cfg.height), 24, 1200);
   else if (key === 'radius') cfg.radius = clamp(num(value, cfg.radius), 0, 9999);
+  else if (key === 'tilt') cfg.tilt = clamp(num(value, cfg.tilt), 0, 45);
   else if (key === 'count') return api.setCount(value) && true;
   else if (typeof cfg[key] === 'boolean') cfg[key] = !!value;
   else cfg[key] = num(value, cfg[key]);
@@ -1602,6 +1620,12 @@ function applyParam(key, value, opts) {
     invalidateFilters(true);          // 圆角参与位移贴图，需要重建
   } else if (key === 'count') {
     /* setCount 已经处理 */
+  } else if (key === 'tilt') {
+    // 只是摆放角度：把 angK 按新的上限缩放，重新写一次 transform 即可
+    for (let i = 0; i < orbs.length; i++) {
+      orbs[i].ang = orbs[i].angK * cfg.tilt;
+      applyTransform(orbs[i]);
+    }
   } else if (key === 'blur' || key === 'highlight' || key === 'tintCss' || key === 'labels') {
     refreshAllOrbs();                                  // 纯 CSS，立即生效
   } else if (['bezel', 'thickness', 'refractPower', 'chroma', 'mapScale', 'samples', 'tint'].indexOf(key) >= 0) {
@@ -1630,7 +1654,12 @@ const api = {
       tension: tensionOn,
       quality: tier().name,
       size: Math.max(cfg.width, cfg.height),        // 兼容旧字段
-      realMapRes: o0 ? (o0.v.rsW + 'x' + o0.v.rsH) : (mapRes(cfg.width) + 'x' + mapRes(cfg.width))
+      realMapRes: o0 ? (o0.v.rsW + 'x' + o0.v.rsH) : (mapRes(cfg.width) + 'x' + mapRes(cfg.width)),
+      /* 派生几何：斜面带宽和玻璃厚度都是按【短边】算的，这里直接给出来，
+         方便集成时确认「920×150 的卡片」拿到的是 ~30px 而不是 147px 的折射带。 */
+      shortSide: o0 ? Math.min(o0.v.width, o0.v.height) : null,
+      bezelPx: o0 ? o0.v.bezelPx : null,
+      thicknessPx: o0 ? o0.v.thicknessPx : null
     });
   },
   /** 可调参数清单（面板就是用它生成的；宿主可据此自建 UI） */
@@ -1810,9 +1839,9 @@ window.__lg = { orbs: orbs, variants: variants, cfg: cfg, frameStats: frameStats
    ========================================================================== */
 
 const DEFAULTS = {
-  count: 3, width: 160, height: 160, radius: 9999, sizeVary: 0.5,
+  count: 3, width: 160, height: 160, radius: 9999, sizeVary: 0.5, tilt: 0,
   refract: true, refractPower: 0.45, bezel: 0.20, thickness: 0.93, chroma: 1,
-  mapScale: 1.05, samples: 128, blur: 0, tint: '#ffffff', tintCss: 0.03, highlight: 1,
+  mapScale: 1.05, samples: 128, blur: 0, tint: '#ffffff', tintCss: 0.03, highlight: 0.2,
   repel: false, tension: false, collide: false, bounce: true, spin: false, drift: false,
   friction: 0.955, dragFollow: 0.30,
   hud: true, panel: false, hint: true, bg: true, labels: false, adaptive: 'auto'
@@ -1824,8 +1853,9 @@ const PARAMS = [
   { group: 'geometry', key: 'radius',      label: '圆角',       min: 0,   max: 300, step: 1,    fmt: v => v >= 300 ? '最大（胶囊/圆）' : v + ' px' },
   { group: 'geometry', key: 'count',       label: '数量',       min: 0,   max: 24,  step: 1,    fmt: v => String(v) },
   { group: 'geometry', key: 'sizeVary',    label: '大小随机差', min: 0,   max: 1,   step: 0.02, fmt: v => Math.round(v * 100) + '%' },
+  { group: 'geometry', key: 'tilt',        label: '初始摆角',   min: 0,   max: 45,  step: 1,    fmt: v => v === 0 ? '正放' : '±' + v + '°' },
   { group: 'refract',  key: 'refractPower',label: '折射强度',   min: 0.02,max: 1.6, step: 0.01, fmt: v => v.toFixed(2) },
-  { group: 'refract',  key: 'bezel',       label: '折射范围',   min: 0.03,max: 0.5, step: 0.005,fmt: v => Math.round(v * 100) + '% 直径' },
+  { group: 'refract',  key: 'bezel',       label: '折射范围',   min: 0.03,max: 0.5, step: 0.005,fmt: v => Math.round(v * 100) + '% 短边' },
   { group: 'refract',  key: 'thickness',   label: '玻璃厚度',   min: 0.1, max: 3,   step: 0.01, fmt: v => v.toFixed(2) },
   { group: 'refract',  key: 'chroma',      label: '边缘色散',   min: 0,   max: 3,   step: 0.05, fmt: v => v.toFixed(2) },
   { group: 'refract',  key: 'mapScale',    label: '折射采样率', min: 0.4, max: 1.6, step: 0.05, fmt: v => Math.round(v * 100) + '%' },

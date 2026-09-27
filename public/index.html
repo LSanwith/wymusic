@@ -341,6 +341,22 @@
             from { opacity: 0; transform: translateX(-50%) translateY(4px); }
             to { opacity: 1; transform: translateX(-50%) translateY(0); }
         }
+        /* 卡片内的液态玻璃层：与卡片等大、不参与布局、不接收指针事件；
+           卡片自带 overflow:hidden，所以半径直接沿用卡片的圆角 */
+        .block > .lg-panel {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            border: 0;
+            background: transparent;
+            border-radius: inherit;
+            pointer-events: none;
+            z-index: 0;
+        }
+        /* 卡片内容压在玻璃之上（h2 原本就是 z-index:2，这里补齐其余子元素） */
+        .block > *:not(.lg-panel) { position: relative; z-index: 1; }
+
     </style>
 </head>
 <body>
@@ -556,134 +572,60 @@ curl -s {origin}/search?keywords=网易云</code></pre>
         })();
     </script>
 
-    <!-- 液态玻璃卡片：直接调用 liquid-glass 组件（新版原生支持任意宽高 + 自定义圆角，
-         内部用圆角矩形 SDF 生成位移贴图）。透明嵌入 bg=none 让它折射本页真实内容；
-         下面的脚本把每张 .block 的位置 / 尺寸 / 圆角原样交给组件，一块卡片一块玻璃。
-         iframe 绝对定位铺满整个文档（随页面滚动），pointer-events:none 保证页面交互不受影响。 -->
-    <iframe id="lgLayer"
-            src="liquid-glass.html?hud=0&amp;bg=none&amp;count=0&amp;w=200&amp;h=100&amp;radius=14"
-            title="液态玻璃装饰层"
-            aria-hidden="true"
-            style="position:absolute;left:0;top:0;width:100%;height:100%;border:0;background:transparent;z-index:0;pointer-events:none"></iframe>
-
+    <!-- 液态玻璃卡片：每张 .block 内部挂一个与自身等大的组件 iframe —— 玻璃就是卡片本身，
+         不再用铺满全页的浮层。卡片原有的 hover 高亮 / 按下涟漪 / 鼠标跟随光效全部保留，
+         玻璃层 pointer-events:none，不抢任何事件。 -->
     <script>
         (function() {
-            var frame = document.getElementById('lgLayer');
-            if (!frame) return;
+            var SRC = 'liquid-glass.html?hud=0&bg=none&count=0';
 
-            var lg = null;
-            var rebuilding = false;
-
-            function cardGeometry(el) {
-                var r = el.getBoundingClientRect();
-                var rad = parseFloat(getComputedStyle(el).borderTopLeftRadius);
-                return {
-                    x: r.left + window.pageXOffset,
-                    y: r.top + window.pageYOffset,
-                    w: Math.round(r.width),
-                    h: Math.round(r.height),
-                    radius: isFinite(rad) && rad > 0 ? rad : 0
-                };
-            }
-
-            function build() {
-                if (!lg || rebuilding) return;
-                rebuilding = true;
-                try {
-                    var doc = document.documentElement;
-                    frame.style.height = Math.max(doc.scrollHeight, doc.clientHeight) + 'px';
-                    lg.clear();
-                    var raw = frame.contentWindow.__lg && frame.contentWindow.__lg.orbs;
-                    var cards = document.querySelectorAll('.block');
-                    for (var i = 0; i < cards.length; i++) {
-                        var g = cardGeometry(cards[i]);
-                        if (g.w < 8 || g.h < 8) continue;
-                        var cx = g.x + g.w / 2, cy = g.y + g.h / 2;
-                        var hd = lg.add({ x: cx, y: cy });
-                        if (!hd) continue;
-                        hd.setPos(cx, cy, true);
-                        hd.setSize(g.w, g.h, g.radius);
-                        hd.setTint('rgba(255,255,255,0.03)');
-                        /* 组件的 makeOrb() 给每块玻璃随机初始旋转 ang: rand(-12,12)、
-                           以及随机色调；那是给它自己演示页"随手撒一把"用的。
-                           这里要跟卡片严丝合缝，所以把角度归零（__lg.orbs 是原始数组出口）。 */
-                        if (raw && raw[i]) raw[i].ang = 0;
-                    }
-                } catch (e) { /* 出问题就保持纯装饰，不影响页面 */ }
-                rebuilding = false;
-            }
-
-            frame.addEventListener('load', function() {
-                try {
-                    lg = frame.contentWindow.liquidGlass;
-                    if (!lg) return;
-                    lg.configure({
-                        count: 0,
-                        /* 组件里 bezelWidth = maxSide × bezel、glassThickness = maxSide × thickness。
-                           卡片是 920×~150 的扁长条，maxSide 取长边 920，所以：
-                         · bezel   0.03  → 折射带宽 ≈ 28px（0.03 是组件的下限）
-                         · thickness 0.14 → 玻璃厚度 ≈ 128px
-                           两者的比值 4.6:1 与组件自身默认（160/0.20/0.93 ≈ 4.65:1）一致，
-                           这样剖面形状才和它在演示页里的观感相同。 */
-                        refractPower: 0.45,
-                        bezel: 0.03,
-                        thickness: 0.14,
-                        chroma: 1.0,
-                        blur: 0,
-                        /* 组件的 .spec 高光层默认拉满（highlight=1），叠在背景图上会把
-                           卡片整片提亮成灰白；卡片要的是"透"而不是"亮"，所以压到很低 */
-                        highlight: 0.18,
-                        tintcss: 0.02,
-                        bounce: false, collide: false, tension: false,
-                        repel: false, spin: false, drift: false,
-                        bg: false, hud: false
-                    });
-                    scheduleSync();
-                } catch (e) { lg = null; }
-            });
-
-            var timer = null;
-
-            /* 初次量完之后页面还可能发生布局变化（字体、视口、内容撑开），
-               所以 load 之后再补几次同步；偏差会写进 <html data-lg-delta>，
-               线上可以直接读出来判断有没有错位。 */
-            function sync() {
-                /* 先量「现有玻璃」相对卡片的偏差（这才是真正的漂移量），再重建。
-                   顺序不能反 —— 先重建再量的话量到的恒为 0，等于没测。 */
-                var cards = document.querySelectorAll('.block');
-                var raw = frame.contentWindow.__lg && frame.contentWindow.__lg.orbs;
-                var deltas = [];
-                if (raw && raw.length) {
-                    for (var i = 0; i < cards.length; i++) {
-                        var g = cardGeometry(cards[i]);
-                        if (raw[i]) deltas.push(Math.round((raw[i].y - raw[i].h / 2) - g.y));
-                    }
+            function initPanel(card) {
+                var box = card.querySelector('.lg-panel');
+                if (!box) {
+                    box = document.createElement('iframe');
+                    box.className = 'lg-panel';
+                    box.setAttribute('aria-hidden', 'true');
+                    box.setAttribute('scrolling', 'no');
+                    box.setAttribute('tabindex', '-1');
+                    box.src = SRC;
+                    card.insertBefore(box, card.firstChild);
                 }
-                try {
-                    document.documentElement.setAttribute('data-lg-delta', deltas.join(','));
-                } catch (e) {}
-                build();
-            }
 
-            function scheduleSync() {
-                var delays = [0, 120, 400, 1000, 2500];
-                for (var i = 0; i < delays.length; i++) setTimeout(sync, delays[i]);
-            }
+                function apply() {
+                    try {
+                        var lg = box.contentWindow.liquidGlass;
+                        if (!lg) return;
+                        var w = Math.round(card.clientWidth);
+                        var h = Math.round(card.clientHeight);
+                        if (w < 8 || h < 8) return;
+                        var rad = parseFloat(getComputedStyle(card).borderTopLeftRadius) || 0;
+                        lg.clear();
+                        lg.setBox(w, h);
+                        if (lg.setRadius) lg.setRadius(rad);
+                        lg.add({ x: w / 2, y: h / 2 });
+                    } catch (e) { /* 跨源（例如 file:// 直接打开）时退化成普通卡片 */ }
+                }
 
-            window.addEventListener('resize', function() {
-                if (timer) clearTimeout(timer);
-                timer = setTimeout(sync, 200);
-            }, { passive: true });
-
-            /* 卡片高度被内容或字体改变时也要跟着走 */
-            if (window.ResizeObserver) {
-                var ro = new ResizeObserver(function() {
-                    if (timer) clearTimeout(timer);
-                    timer = setTimeout(sync, 150);
+                if (box.dataset.lgReady) { apply(); return; }
+                box.addEventListener('load', function() {
+                    box.dataset.lgReady = '1';
+                    apply();
                 });
-                var blocks = document.querySelectorAll('.block');
-                for (var i = 0; i < blocks.length; i++) ro.observe(blocks[i]);
+                if (window.ResizeObserver) {
+                    var t = null;
+                    new ResizeObserver(function() {
+                        if (t) clearTimeout(t);
+                        t = setTimeout(apply, 160);
+                    }).observe(card);
+                }
             }
+
+            function start() {
+                var cards = document.querySelectorAll('.block');
+                for (var i = 0; i < cards.length; i++) initPanel(cards[i]);
+            }
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+            else start();
         })();
     </script>
 
