@@ -648,11 +648,12 @@ curl -s {origin}/search?keywords=网易云</code></pre>
                所以 load 之后再补几次同步；偏差会写进 <html data-lg-delta>，
                线上可以直接读出来判断有没有错位。 */
             function sync() {
-                build();
+                /* 先量「现有玻璃」相对卡片的偏差（这才是真正的漂移量），再重建。
+                   顺序不能反 —— 先重建再量的话量到的恒为 0，等于没测。 */
                 var cards = document.querySelectorAll('.block');
                 var raw = frame.contentWindow.__lg && frame.contentWindow.__lg.orbs;
                 var deltas = [];
-                if (raw) {
+                if (raw && raw.length) {
                     for (var i = 0; i < cards.length; i++) {
                         var g = cardGeometry(cards[i]);
                         if (raw[i]) deltas.push(Math.round((raw[i].y - raw[i].h / 2) - g.y));
@@ -661,6 +662,7 @@ curl -s {origin}/search?keywords=网易云</code></pre>
                 try {
                     document.documentElement.setAttribute('data-lg-delta', deltas.join(','));
                 } catch (e) {}
+                build();
             }
 
             function scheduleSync() {
