@@ -638,15 +638,50 @@ curl -s {origin}/search?keywords=网易云</code></pre>
                         repel: false, spin: false, drift: false,
                         bg: false, hud: false
                     });
-                    build();
+                    scheduleSync();
                 } catch (e) { lg = null; }
             });
 
             var timer = null;
+
+            /* 初次量完之后页面还可能发生布局变化（字体、视口、内容撑开），
+               所以 load 之后再补几次同步；偏差会写进 <html data-lg-delta>，
+               线上可以直接读出来判断有没有错位。 */
+            function sync() {
+                build();
+                var cards = document.querySelectorAll('.block');
+                var raw = frame.contentWindow.__lg && frame.contentWindow.__lg.orbs;
+                var deltas = [];
+                if (raw) {
+                    for (var i = 0; i < cards.length; i++) {
+                        var g = cardGeometry(cards[i]);
+                        if (raw[i]) deltas.push(Math.round((raw[i].y - raw[i].h / 2) - g.y));
+                    }
+                }
+                try {
+                    document.documentElement.setAttribute('data-lg-delta', deltas.join(','));
+                } catch (e) {}
+            }
+
+            function scheduleSync() {
+                var delays = [0, 120, 400, 1000, 2500];
+                for (var i = 0; i < delays.length; i++) setTimeout(sync, delays[i]);
+            }
+
             window.addEventListener('resize', function() {
                 if (timer) clearTimeout(timer);
-                timer = setTimeout(build, 200);
+                timer = setTimeout(sync, 200);
             }, { passive: true });
+
+            /* 卡片高度被内容或字体改变时也要跟着走 */
+            if (window.ResizeObserver) {
+                var ro = new ResizeObserver(function() {
+                    if (timer) clearTimeout(timer);
+                    timer = setTimeout(sync, 150);
+                });
+                var blocks = document.querySelectorAll('.block');
+                for (var i = 0; i < blocks.length; i++) ro.observe(blocks[i]);
+            }
         })();
     </script>
 
