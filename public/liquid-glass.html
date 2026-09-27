@@ -1,0 +1,1864 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>液态玻璃 · Liquid Glass</title>
+<style>
+/* ============================================================================
+   液态玻璃 · 可调参数版
+
+   效果本体（与原实现同源，不是近似）：
+     · 一维折射剖面：凸面贝塞尔斜面求导 → 斯涅尔折射 → 逐点像素位移
+     · 二维位移贴图写入 R/G 通道（128 为中性），最大位移落在贴边处
+     · SVG 滤镜链：feImage → 三通道独立 feDisplacementMap（色散）→ feBlend screen
+       → feColorMatrix（玻璃染色）
+     · 通过 backdrop-filter 作用于玻璃背后的真实内容，所以是「真的在折射」
+
+   右上角胶囊可加/减/清空玻璃，旁边的滑块按钮打开参数面板，
+   所有参数都能实时调；同一套参数同时也走 window.liquidGlass 接口。
+
+   嵌入方式：把本文件丢进 iframe 即可；bg=none 时背景透明，可直接折射父页面内容。
+     <iframe src="liquid-glass.html?hud=0&bg=none&size=160"
+             style="border:0;width:100%;height:320px"></iframe>
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0;
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: transparent;
+  color: #eaf0ff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+               "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  cursor: grab;
+}
+body.grabbing { cursor: grabbing; }
+
+/* ---------- 内置背景（克制，只为让折射可见；bg=none 时整体隐藏） ---------- */
+.bg {
+  position: fixed; inset: 0; z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(110% 85% at 14% 6%,  #16204c 0%, rgba(20,28,66,0) 55%),
+    radial-gradient(100% 80% at 88% 96%, #2c1040 0%, rgba(58,20,80,0) 58%),
+    radial-gradient(90% 70% at 80% 10%,  #04293a 0%, rgba(6,54,74,0) 60%),
+    radial-gradient(130% 110% at 50% 50%, #080b16 0%, #03040a 100%);
+}
+.grid {
+  position: fixed; inset: 0; z-index: 0;
+  pointer-events: none;
+  opacity: .95;
+  background-image:
+    repeating-linear-gradient(0deg,  rgba(175,215,255,.20) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(90deg, rgba(175,215,255,.20) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(0deg,  rgba(255,255,255,.045) 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(90deg, rgba(255,255,255,.032) 0 1px, transparent 1px 3px);
+  mask-image: radial-gradient(135% 115% at 50% 44%, #000 26%, transparent 92%);
+  -webkit-mask-image: radial-gradient(135% 115% at 50% 44%, #000 26%, transparent 92%);
+}
+.glow {
+  position: fixed; z-index: 0;
+  pointer-events: none;
+  border-radius: 50%;
+  filter: blur(24px);
+  opacity: .72;
+}
+.glow.g1 {
+  width: 22vmin; height: 22vmin; left: 9%; top: 20%;
+  background: radial-gradient(circle at 40% 40%, #ff5f8f, rgba(122,43,255,.22) 70%, transparent);
+}
+.glow.g2 {
+  width: 20vmin; height: 20vmin; left: 44%; bottom: 12%;
+  background: radial-gradient(circle at 55% 45%, #26e2c0, rgba(31,107,255,.22) 70%, transparent);
+}
+.glow.g3 {
+  width: 16vmin; height: 16vmin; right: 10%; top: 52%;
+  background: radial-gradient(circle at 45% 45%, #ffd166, rgba(255,110,60,.22) 70%, transparent);
+}
+body.with-drift .glow { will-change: transform; }
+body.with-drift .glow.g1 { animation: drift 32s ease-in-out infinite alternate; }
+body.with-drift .glow.g2 { animation: drift 41s -9s ease-in-out infinite alternate; }
+body.with-drift .glow.g3 { animation: drift 37s -17s ease-in-out infinite alternate; }
+@keyframes drift { to { transform: translate3d(6vmin, -5vmin, 0) scale(1.18); } }
+
+body.no-bg .bg, body.no-bg .grid, body.no-bg .glow { display: none; }
+
+/* ---------- 舞台 ---------- */
+#stage {
+  position: fixed; inset: 0; z-index: 1;
+  overflow: hidden;
+  touch-action: none;
+  contain: layout paint;
+}
+
+/* ---------- 玻璃体 ---------- */
+/* 结构说明（很关键）：
+   「折射」必须挂在 .orb 这个根元素上，不能挂到里面的 .glass 上 ——
+   因为 .orb 带 transform + will-change，本身是合成层，backdrop-filter 会被
+   正常光栅化；而内部的 .spec / .edge / .pulse 各自也是合成层，一旦它们叠在
+   带 backdrop-filter 的子元素上面，那个子元素的背景滤镜就不会被绘制，
+   结果是「绑定成功、computed style 也对，但什么都看不到」。 */
+.orb {
+  position: absolute;
+  top: 0; left: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  /* 滤镜还没建好时的兜底（占位，避免出现完全没有玻璃感的空洞） */
+  backdrop-filter: blur(8px) saturate(140%);
+  -webkit-backdrop-filter: blur(8px) saturate(140%);
+  transform: translate3d(-9999px, -9999px, 0);
+  will-change: transform;
+  backface-visibility: hidden;
+  contain: layout style;
+  pointer-events: none;
+  --tint: rgba(255,255,255,0);
+  --lx: 0; --ly: 0; --ang: 0;
+  --hi: 1; --hi2: .9; --hi3: .95;
+}
+.orb .glass {
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  background: var(--tint);
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,.12),
+    inset 0 1px 2px rgba(255,255,255,.34),
+    inset 0 -10px 26px rgba(120,160,255,.14);
+  transition: box-shadow .3s ease;
+}
+/* 性能降级：临时摘掉折射（保留高光与外框），保证交互依旧流畅 */
+.orb.safe {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+.orb.safe .glass { background: rgba(180,205,255,.10); }
+
+/* 高光：跟随指针，由 CSS 变量驱动；强度可用 --hi* 调 */
+.orb .spec {
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    radial-gradient(circle 58% at calc(50% + var(--lx) * 30%) calc(50% + var(--ly) * 30%),
+      rgba(255,255,255,calc(.28 * var(--hi))) 0%, rgba(255,255,255,calc(.09 * var(--hi))) 32%, rgba(255,255,255,0) 62%),
+    radial-gradient(circle 46% at calc(50% - var(--lx) * 26%) calc(50% - var(--ly) * 26%),
+      rgba(140,190,255,calc(.24 * var(--hi2))) 0%, rgba(140,190,255,0) 58%),
+    conic-gradient(from calc(var(--ang) * 1deg) at 50% 50%,
+      rgba(255,255,255,calc(.30 * var(--hi3))), rgba(255,255,255,0) 22%,
+      rgba(255,255,255,0) 55%, rgba(180,220,255,calc(.26 * var(--hi3))) 70%, rgba(255,255,255,calc(.30 * var(--hi3))));
+  mix-blend-mode: screen;
+}
+.orb .edge {
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    inset 0 5px 12px rgba(255,255,255,.26),
+    inset 0 -7px 18px rgba(120,160,255,.20),
+    inset 0 0 20px rgba(255,255,255,.06);
+}
+.orb .label {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  font-size: 12px; font-weight: 600; letter-spacing: .18em;
+  color: rgba(238,246,255,.62);
+  text-shadow: 0 1px 8px rgba(0,0,0,.55);
+  pointer-events: none; user-select: none;
+}
+.orb.plain .label { display: none; }
+.orb.grabbed .glass {
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,.36),
+    inset 0 1px 3px rgba(255,255,255,.55),
+    inset 0 -10px 26px rgba(140,180,255,.22);
+}
+.orb .pulse {
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0; transform: scale(1);
+  transition: opacity .3s ease, transform .5s cubic-bezier(.2,.9,.3,1.2);
+  box-shadow: inset 0 0 40px rgba(180,215,255,.45);
+}
+.orb.grabbed .pulse { opacity: .5; transform: scale(1.09); }
+
+.ripple {
+  position: absolute;
+  width: 34px; height: 34px; margin: -17px 0 0 -17px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(190,225,255,.65);
+  pointer-events: none;
+  animation: ripple .7s ease-out forwards;
+  will-change: transform, opacity;
+}
+@keyframes ripple {
+  from { transform: scale(.3); opacity: .85; }
+  to   { transform: scale(3.2); opacity: 0; }
+}
+
+/* ---------- HUD 胶囊 ---------- */
+#hud {
+  position: fixed; z-index: 20;
+  top: 14px; right: 14px;
+  display: flex; align-items: center; gap: 3px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(10,14,26,.42);
+  border: 1px solid rgba(255,255,255,.12);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  box-shadow: 0 10px 30px rgba(0,0,0,.32);
+  user-select: none;
+}
+body.hud-hidden #hud, body.hud-hidden #panel, body.hud-hidden #hint { display: none; }
+
+#hud button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #e6eeff;
+  width: 30px; height: 30px;
+  border-radius: 999px;
+  display: grid; place-items: center;
+  cursor: pointer;
+  transition: background .16s ease, transform .16s cubic-bezier(.2,.9,.3,1.3);
+}
+#hud button:hover { background: rgba(255,255,255,.14); }
+#hud button:active { transform: scale(.9); }
+#hud button.on { background: rgba(120,200,255,.22); }
+#hud button svg { width: 15px; height: 15px; display: block; }
+#hud .count {
+  font-size: 11.5px; font-variant-numeric: tabular-nums;
+  padding: 0 6px; min-width: 22px; text-align: center;
+  color: rgba(226,236,255,.72);
+}
+#hud .fps {
+  font-size: 11px; font-variant-numeric: tabular-nums;
+  padding: 0 7px; min-width: 46px; text-align: right;
+  color: rgba(226,236,255,.62);
+  border-right: 1px solid rgba(255,255,255,.12);
+  margin-right: 2px;
+}
+#hud .fps b { font-weight: 600; color: #a8e6bd; }
+#hud .fps.warn b { color: #ffcf7a; }
+#hud .fps.bad  b { color: #ff9a9a; }
+#hud .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  margin: 0 5px 0 7px;
+  background: #7ddfa8;
+  box-shadow: 0 0 8px rgba(125,223,168,.8);
+  cursor: pointer;
+  transition: background .3s ease, box-shadow .3s ease;
+}
+#hud .dot.warn { background: #ffcf7a; box-shadow: 0 0 8px rgba(255,207,122,.85); }
+#hud .dot.off  { background: #ff8f8f; box-shadow: 0 0 8px rgba(255,143,143,.85); }
+
+/* ---------- 参数面板 ---------- */
+#panel {
+  position: fixed; z-index: 19;
+  top: 58px; right: 14px;
+  width: 268px;
+  max-height: calc(100vh - 76px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 14px 14px;
+  border-radius: 16px;
+  background: rgba(10,14,26,.62);
+  border: 1px solid rgba(255,255,255,.13);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  box-shadow: 0 18px 50px rgba(0,0,0,.45);
+  color: #e9f0ff;
+  font-size: 12px;
+  user-select: none;
+  opacity: 0;
+  transform: translate3d(0, -8px, 0);
+  pointer-events: none;
+  transition: opacity .22s ease, transform .22s cubic-bezier(.2,.9,.3,1.2);
+}
+#panel.open { opacity: 1; transform: translate3d(0, 0, 0); pointer-events: auto; }
+#panel::-webkit-scrollbar { width: 8px; }
+#panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,.16); border-radius: 4px; }
+
+#panel h4 {
+  margin: 12px 0 7px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .14em;
+  text-transform: uppercase;
+  color: rgba(180,205,240,.62);
+  display: flex; align-items: center; gap: 8px;
+}
+#panel h4:first-child { margin-top: 2px; }
+#panel h4::after { content: ''; flex: 1; height: 1px; background: rgba(255,255,255,.10); }
+
+.row { margin-bottom: 9px; }
+.row .top {
+  display: flex; align-items: baseline; gap: 6px;
+  margin-bottom: 3px;
+}
+.row .name { flex: 1; color: rgba(224,234,255,.86); }
+.row .val {
+  font-variant-numeric: tabular-nums;
+  color: #9fd4ff; font-weight: 600;
+}
+.row .hint { font-size: 10.5px; color: rgba(200,214,240,.42); margin-top: 2px; }
+
+input[type=range] {
+  appearance: none;
+  width: 100%; height: 16px;
+  background: transparent;
+  margin: 0;
+  cursor: pointer;
+}
+input[type=range]::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px;
+  background: rgba(255,255,255,.15);
+}
+input[type=range]::-webkit-slider-thumb {
+  appearance: none;
+  width: 13px; height: 13px; margin-top: -4.5px;
+  border-radius: 50%;
+  background: #cfe6ff;
+  border: 0;
+  box-shadow: 0 1px 5px rgba(0,0,0,.45);
+  transition: transform .12s ease;
+}
+input[type=range]:active::-webkit-slider-thumb { transform: scale(1.18); }
+input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: rgba(255,255,255,.15); }
+input[type=range]::-moz-range-thumb { width: 13px; height: 13px; border: 0; border-radius: 50%; background: #cfe6ff; }
+
+.sw {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 3px 0;
+}
+.sw .name { color: rgba(224,234,255,.86); }
+.sw input { appearance: none; width: 34px; height: 18px; border-radius: 999px; background: rgba(255,255,255,.16); position: relative; cursor: pointer; transition: background .18s ease; }
+.sw input::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: #e8f1ff; transition: transform .18s cubic-bezier(.2,.9,.3,1.3);
+}
+.sw input:checked { background: rgba(120,200,255,.55); }
+.sw input:checked::after { transform: translateX(16px); }
+
+.color-row { display: flex; align-items: center; gap: 8px; }
+.color-row input[type=color] {
+  appearance: none; width: 38px; height: 24px;
+  padding: 0; border: 1px solid rgba(255,255,255,.18);
+  border-radius: 7px; background: transparent; cursor: pointer;
+}
+.color-row input[type=color]::-webkit-color-swatch-wrapper { padding: 2px; }
+.color-row input[type=color]::-webkit-color-swatch { border: 0; border-radius: 5px; }
+.color-row .name { flex: 1; }
+
+#panel .actions { display: flex; gap: 6px; margin-top: 12px; }
+#panel .actions button {
+  flex: 1;
+  appearance: none; cursor: pointer;
+  padding: 7px 0; border-radius: 9px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.03));
+  color: #e9f0ff; font: inherit; font-size: 11.5px;
+  transition: background .16s ease, transform .12s ease;
+}
+#panel .actions button:hover { background: rgba(255,255,255,.16); }
+#panel .actions button:active { transform: scale(.97); }
+
+#hint {
+  position: fixed; z-index: 18;
+  left: 50%; bottom: 26px;
+  transform: translate3d(-50%, 0, 0);
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 12px; letter-spacing: .04em;
+  color: rgba(230,238,255,.82);
+  background: rgba(10,14,26,.5);
+  border: 1px solid rgba(255,255,255,.12);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .5s ease, transform .5s ease;
+}
+#hint.show { opacity: 1; transform: translate3d(-50%, -5px, 0); }
+</style>
+</head>
+<body>
+
+<!-- 内置背景（bg=none 时全部隐藏，此时玻璃会折射父页面内容） -->
+<div class="bg" aria-hidden="true"></div>
+<div class="grid" aria-hidden="true"></div>
+<div class="glow g1" aria-hidden="true"></div>
+<div class="glow g2" aria-hidden="true"></div>
+<div class="glow g3" aria-hidden="true"></div>
+
+<!-- 玻璃舞台 -->
+<div id="stage"></div>
+
+<!-- HUD 胶囊 -->
+<div id="hud" aria-label="液态玻璃控制">
+  <span class="fps" id="hudFps" title="实时帧率"><b>--</b> fps</span>
+  <span class="dot" id="hudDot" title="折射效果正常"></span>
+  <span class="count" id="hudCount">3</span>
+  <button class="act" id="btnAdd" title="添加玻璃" aria-label="添加玻璃">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+  <button class="act" id="btnRemove" title="移除最后一块" aria-label="移除">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg>
+  </button>
+  <button class="act" id="btnClear" title="清空" aria-label="清空">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
+  <button id="btnQuality" title="折射质量" aria-label="折射质量">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5"/></svg>
+  </button>
+  <button id="btnPanel" title="参数调节" aria-label="参数调节">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8M16 4v6M8 14v6"/></svg>
+  </button>
+</div>
+
+<!-- 参数面板（内容由 PARAMS 表生成，和接口是同一套参数） -->
+<div id="panel" aria-label="液态玻璃参数"></div>
+
+<div id="hint">拖动玻璃 · 双击空白新增 · 双击玻璃移除</div>
+
+<!-- 承载折射滤镜（必须在文档里且可见，否则 backdrop-filter 的引用会失效） -->
+<div id="filterRoot" aria-hidden="true"
+     style="position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;pointer-events:none;"></div>
+
+<script>
+(function () {
+'use strict';
+
+/* ==========================================================================
+   0. 基础
+   ========================================================================== */
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+const XLINK = 'http://www.w3.org/1999/xlink';
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const rand  = (a, b) => a + Math.random() * (b - a);
+const num = (v, d) => { const n = parseFloat(v); return isFinite(n) ? n : d; };
+const bool = (v, d) => (v == null ? d : (v === true || v === 1 || v === '1' || v === 'true'));
+const qs = new URLSearchParams(location.search);
+
+const stage = document.getElementById('stage');
+const filterRoot = document.getElementById('filterRoot');
+const hud = document.getElementById('hud');
+const hudCount = document.getElementById('hudCount');
+const hudFps = document.getElementById('hudFps');
+const hudFpsVal = hudFps.querySelector('b');
+const hudDot = document.getElementById('hudDot');
+const hintEl = document.getElementById('hint');
+const panelEl = document.getElementById('panel');
+
+/* ---------------------------------------------------------------------------
+   参数（唯一真源）：URL 参数 → cfg，面板与接口读写同一个对象
+   ---------------------------------------------------------------------------
+   · 折射类参数（bezel / thickness / refract / mapScale / chroma / tint / samples）
+     改任一都会重建 SVG 滤镜；重建是"按需 + 分帧"的，面板拖动时不会卡。
+   · 视觉类参数（blur / highlight / tintCss）只改 CSS，立即生效。
+   ------------------------------------------------------------------------- */
+const cfg = {
+  /* —— 几何 —— */
+  count:        clamp(num(qs.get('count'), 3), 0, 24),
+  size:         clamp(num(qs.get('size'), 160), 40, 720),
+  sizeVary:     clamp(num(qs.get('vary'), 0.5), 0, 1),    // 尺寸随机差异（默认让大小有点变化）
+  /* —— 折射 —— */
+  refract:      bool(qs.get('refract'), true),           // 是否启用折射
+  refractPower: clamp(num(qs.get('power'), 0.45), 0.02, 3),  // 折射强度
+  bezel:        clamp(num(qs.get('bezel'), 0.20), 0.03, 0.5),// 斜面宽度（占直径）
+  thickness:    clamp(num(qs.get('thick'), 0.93), 0.1, 3),   // 玻璃厚度
+  chroma:       clamp(num(qs.get('chroma'), 1), 0, 3),       // 色散强度
+  mapScale:     clamp(num(qs.get('map'), 1.05), 0.4, 2),     // 采样率（贴图分辨率）
+  samples:      Math.round(clamp(num(qs.get('samples'), 128), 24, 256)), // 剖面采样数
+  blur:         clamp(num(qs.get('blur'), 0), 0, 40),        // 折射之外额外模糊（px）
+  tint:         qs.get('tint') || '#ffffff',                 // 玻璃染色（走滤镜）
+  tintCss:      clamp(num(qs.get('tintcss'), 0.03), 0, 0.5), // 额外底色覆盖(DOM)
+  highlight:    clamp(num(qs.get('hi'), 1), 0, 2),           // 高光强度
+  /* —— 交互/动效 —— */
+  repel:        bool(qs.get('repel'), false),
+  tension:      bool(qs.get('tension'), false),
+  collide:      bool(qs.get('collide'), false),
+  bounce:       bool(qs.get('bounce'), true),
+  spin:         bool(qs.get('spin'), false),
+  drift:        bool(qs.get('drift'), false),
+  friction:     clamp(num(qs.get('friction'), 0.955), 0, 1),   // 空气阻尼，0 = 完全不减速
+  dragFollow:   clamp(num(qs.get('follow'), 0.30), 0.05, 1),   // 跟手程度，1 = 完全跟手（1:1）
+  /* —— 显示 —— */
+  hud:          bool(qs.get('hud'), true),
+  panel:        bool(qs.get('panel'), false),                 // 参数面板默认展开？
+  hint:         bool(qs.get('hint'), true),
+  bg:           qs.get('bg') !== 'none',
+  labels:       bool(qs.get('labels'), false),
+  adaptive:     (qs.get('adaptive') === '0' ? 'high'
+                : (['auto', 'high', 'low'].indexOf(qs.get('adaptive')) >= 0 ? qs.get('adaptive') : 'auto'))
+};
+let tensionOn = cfg.tension;
+
+/* ==========================================================================
+   1. 折射算法（与原实现同源）
+   ========================================================================== */
+
+const SurfaceEquations = {
+  // 凸面：中心平坦、边缘急速下坠，形成贝塞尔斜面
+  CONVEX: { fn: (x) => Math.pow(1 - Math.pow(1 - x, 4), 1 / 4) }
+};
+
+/** 一维折射位移剖面：斜面求导得法线 → 斯涅尔折射 → 得该点像素位移量 */
+function calculateDisplacementMap(glassThickness, bezelWidth, bezelHeightFn, refractiveIndex, samples) {
+  samples = samples || 128;
+  const eta = 1 / refractiveIndex;
+  function refract(nx, ny) {
+    const dot = ny;
+    const k = 1 - eta * eta * (1 - dot * dot);
+    if (k < 0) return null;                       // 全反射
+    const ks = Math.sqrt(k);
+    return [-(eta * dot + ks) * nx, eta - (eta * dot + ks) * ny];
+  }
+  const out = new Array(samples);
+  for (let i = 0; i < samples; i++) {
+    const x = i / samples;
+    const y = bezelHeightFn(x);
+    const dx = x < 1 ? 0.0001 : -0.0001;
+    const d = (bezelHeightFn(x + dx) - y) / dx;
+    const mag = Math.sqrt(d * d + 1);
+    const ref = refract(-d / mag, -1 / mag);
+    out[i] = (!ref || Math.abs(ref[1]) < 1e-10) ? 0 : ref[0] * ((y * bezelWidth + glassThickness) / ref[1]);
+  }
+  return out;
+}
+
+/* ---- 颜色工具 ---- */
+function hexToRgb(hex) {
+  let h = String(hex || '#ffffff').replace('#', '').trim();
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const n = parseInt(h, 16);
+  if (!isFinite(n)) return { r: 255, g: 255, b: 255 };
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+function rgbToHex(c) {
+  const f = (v) => clamp(Math.round(v), 0, 255).toString(16).padStart(2, '0');
+  return '#' + f(c.r) + f(c.g) + f(c.b);
+}
+
+// RGBA 字节流 → base64（比 canvas.toDataURL 快得多，同步、无编码线程开销）
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+function bytesToBase64(bytes) {
+  let s = '';
+  const len = bytes.length;
+  for (let i = 0; i < len; i += 3) {
+    const b0 = bytes[i];
+    const b1 = i + 1 < len ? bytes[i + 1] : 0;
+    const b2 = i + 2 < len ? bytes[i + 2] : 0;
+    s += B64[b0 >> 2] + B64[((b0 & 3) << 4) | (b1 >> 4)] +
+         B64[((b1 & 15) << 2) | (b2 >> 6)] + B64[b2 & 63];
+  }
+  const pad = (3 - (len % 3)) % 3;
+  if (pad === 2) s = s.slice(0, -2) + '==';
+  else if (pad === 1) s = s.slice(0, -1) + '=';
+  return s;
+}
+
+// —— 自研 PNG 编码：位移贴图是平滑渐变，PNG Sub 行过滤 + DEFLATE stored 即可 ——
+const PNG_HEAD = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const CRC_TABLE = (function () {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+function pngChunk(type, data) {
+  const len = data.length;
+  const out = new Uint8Array(12 + len);          // 4 长度 + 4 类型 + data + 4 CRC
+  out[0] = (len >>> 24) & 0xff; out[1] = (len >>> 16) & 0xff;
+  out[2] = (len >>> 8) & 0xff;  out[3] = len & 0xff;
+  out[4] = type.charCodeAt(0); out[5] = type.charCodeAt(1);
+  out[6] = type.charCodeAt(2); out[7] = type.charCodeAt(3);
+  out.set(data, 8);
+  const crc = crc32(out.subarray(4, 8 + len));   // 覆盖「类型 + 数据」
+  out[8 + len] = (crc >>> 24) & 0xff;
+  out[9 + len] = (crc >>> 16) & 0xff;
+  out[10 + len] = (crc >>> 8) & 0xff;
+  out[11 + len] = crc & 0xff;
+  return out;
+}
+/** zlib（RFC1950）+ DEFLATE stored 块：不做熵编码，无位序风险，正确性可直接证明 */
+function zlibStored(data) {
+  const MAX = 65535;
+  const nBlocks = Math.max(1, Math.ceil(data.length / MAX));
+  const out = new Uint8Array(2 + data.length + nBlocks * 5 + 4);
+  let o = 0;
+  out[o++] = 0x78; out[o++] = 0x9c;
+  let pos = 0, first = true;
+  while (first || pos < data.length) {
+    first = false;
+    const n = Math.min(MAX, data.length - pos);
+    out[o++] = (pos + n >= data.length) ? 1 : 0;   // BFINAL + BTYPE=00
+    out[o++] = n & 0xff;  out[o++] = (n >>> 8) & 0xff;
+    out[o++] = (~n) & 0xff; out[o++] = ((~n) >>> 8) & 0xff;
+    out.set(data.subarray(pos, pos + n), o);
+    o += n; pos += n;
+    if (n === 0) break;
+  }
+  let a = 1, b = 0;
+  for (let i = 0; i < data.length; i++) { a = (a + data[i]) % 65521; b = (b + a) % 65521; }
+  out[o++] = (b >>> 8) & 0xff; out[o++] = b & 0xff;
+  out[o++] = (a >>> 8) & 0xff; out[o++] = a & 0xff;
+  return out.subarray(0, o);
+}
+function encodePNG(rgba, w, h) {
+  const ihdr = new Uint8Array(13);
+  ihdr[0] = (w >>> 24) & 0xff; ihdr[1] = (w >>> 16) & 0xff; ihdr[2] = (w >>> 8) & 0xff; ihdr[3] = w & 0xff;
+  ihdr[4] = (h >>> 24) & 0xff; ihdr[5] = (h >>> 16) & 0xff; ihdr[6] = (h >>> 8) & 0xff; ihdr[7] = h & 0xff;
+  ihdr[8] = 8;  ihdr[9] = 6;  ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  const stride = w * 4;
+  // 行过滤：第 0 行 None，其余 Sub（与左邻像素作差）——渐变数据作差后几乎全是 0
+  const raw = new Uint8Array((stride + 1) * h);
+  for (let y = 0; y < h; y++) {
+    const o = y * (stride + 1), src = y * stride;
+    if (y === 0) {
+      raw[o] = 0;
+      raw.set(rgba.subarray(src, src + stride), o + 1);
+    } else {
+      raw[o] = 1;
+      for (let x = 0; x < stride; x++) {
+        raw[o + 1 + x] = (rgba[src + x] - (x >= 4 ? rgba[src + x - 4] : 0)) & 0xff;
+      }
+    }
+  }
+  const z = zlibStored(raw);
+  const parts = [new Uint8Array(PNG_HEAD), pngChunk('IHDR', ihdr), pngChunk('IDAT', z), pngChunk('IEND', new Uint8Array(0))];
+  let total = 0; for (const p of parts) total += p.length;
+  const all = new Uint8Array(total);
+  let off = 0; for (const p of parts) { all.set(p, off); off += p.length; }
+  return all;
+}
+function mapDataUrl(rgba, w, h) {
+  return 'data:image/png;base64,' + bytesToBase64(encodePNG(rgba, w, h));
+}
+
+/** 采样位移剖面 → RGBA 像素（R/G 存向量，A=255） */
+function sampleRefractionMap(profile, maxDisp, rs, size, bezelPx) {
+  const w = rs, h = rs;
+  const rgba = new Uint8Array(w * h * 4);
+  const cx = w * 0.5, cy = h * 0.5;
+  const rad = rs * 0.5;
+  const inner = Math.max(0.5, rad - bezelPx * (rs / size));
+  const invBand = 1 / Math.max(1e-6, rad - inner);
+  // 位移量按元素 CSS 像素归一化：feDisplacementMap 的 scale 作用于元素坐标，
+  // 而贴图分辨率 ≠ 元素尺寸，所以必须乘 size/rs，否则各档位强度不一致。
+  const invMax = (size / rs) / Math.max(maxDisp, 1);
+  let i = 0;
+  for (let y = 0; y < h; y++) {
+    const dy = y + 0.5 - cy;
+    for (let x = 0; x < w; x++, i += 4) {
+      const dx = x + 0.5 - cx;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d >= rad || d <= inner) {                 // 平坦区 / 外部：零位移
+        rgba[i] = 128; rgba[i + 1] = 128; rgba[i + 2] = 0; rgba[i + 3] = 255;
+        continue;
+      }
+      const t = Math.min(1, (rad - d) * invBand);   // 0 = 斜面内侧，1 = 贴边
+      // 剖面索引：x 是「斜面归一化高度」，x→1 对应玻璃最外缘。
+      // 所以 t=1（贴边）取 profile 末尾、t=0（斜面内侧）取首端。
+      // 这一步的朝向决定了「边缘有没有折射」：写反的话最大位移会跑到斜面内侧，
+      // 玻璃边缘反而零位移，肉眼几乎看不出液态玻璃。
+      const disp = profile[(t * (profile.length - 1)) | 0] || 0;
+      const range = 127 * invMax * 0.98;
+      rgba[i]     = 128 + (-dx / d * disp) * range;  // R = X 位移
+      rgba[i + 1] = 128 + (-dy / d * disp) * range;  // G = Y 位移
+      rgba[i + 2] = 0;
+      rgba[i + 3] = 255;
+    }
+  }
+  return rgba;
+}
+
+/* ==========================================================================
+   2. 滤镜档位：按尺寸只生成一次，永久缓存
+   ========================================================================== */
+
+const SIZES = [560, 470, 392, 312, 252, 196, 148, 104, 76, 56];
+const MAP_MIN = 72;
+
+/* 折射质量档位（性能自适应就是在这几档之间切换）
+     high : 采样率 ×1，完整折射
+     low  : 采样率 ×0.67 左右，像素量约 2/5 —— 折射仍保留，只是边缘精度略降
+     off  : 连折射都撑不住时才整层退出
+   注意：自动档位是在用户设定的 mapScale 之上再乘一个系数，
+   所以用户把采样率调低后，自动降级不会把画质压到不可用。 */
+const TIERS = [
+  { name: 'high', scale: 1,    cap: 260, floor: MAP_MIN, refract: true },
+  { name: 'low',  scale: 0.67, cap: 150, floor: 44,       refract: true },
+  { name: 'off',  scale: 0.55, cap: 110, floor: 40,       refract: false }
+];
+let tierIdx = 0;
+const tier = () => TIERS[tierIdx];
+/** 某尺寸在当前档位下的位移贴图分辨率 */
+function mapRes(size) {
+  const t = tier();
+  const px = size / 2 * cfg.mapScale * t.scale;
+  return Math.round(clamp(px, t.floor, t.cap));
+}
+
+const variants = SIZES.map(function (size) {
+  return { size: size, rs: mapRes(size), id: 'lgf-' + size, built: false, dirty: true };
+});
+
+function buildFilter(v) {
+  if (v.built && !v.dirty) return v.id;
+  // 参数或档位变化后按新参数重建：先移除旧滤镜（连同它所在的 <svg>），构建完重新挂载
+  const old = document.getElementById(v.id);
+  if (old) {
+    const svg = old.parentNode;
+    if (svg && svg.parentNode) svg.parentNode.removeChild(svg);
+    else if (old.parentNode) old.parentNode.removeChild(old);
+  }
+  v.built = false;
+  v.dirty = false;
+  v.rs = mapRes(v.size);
+  const size = v.size;
+  const bezelWidth = Math.max(1.5, size * cfg.bezel);
+  const profile = calculateDisplacementMap(size * cfg.thickness, bezelWidth, SurfaceEquations.CONVEX.fn, 1.5, cfg.samples);
+  let maxDisp = 0.1;
+  for (let i = 0; i < profile.length; i++) { const a = Math.abs(profile[i]); if (a > maxDisp) maxDisp = a; }
+
+  const url = mapDataUrl(sampleRefractionMap(profile, maxDisp, v.rs, size, bezelWidth), v.rs, v.rs);
+  const base = Math.max(3, maxDisp * cfg.refractPower);
+  const sR = base * (1 - 0.10 * cfg.chroma);
+  const sG = base;
+  const sB = base * (1 + 0.12 * cfg.chroma);
+
+  // 玻璃染色：折算成 RGB 增益（白=1，染色通道被压低）
+  const tint = hexToRgb(cfg.tint);
+  const gR = 0.4 + 0.6 * (tint.r / 255), gG = 0.4 + 0.6 * (tint.g / 255), gB = 0.4 + 0.6 * (tint.b / 255);
+
+  // 诊断用的中间量（供标定脚本读取）
+  if (window.__lg && window.__lg.debug) {
+    window.__lg.debug[v.id] = {
+      size: size, rs: v.rs, bezelWidth: +bezelWidth.toFixed(2), maxDisp: +maxDisp.toFixed(2),
+      base: +base.toFixed(2), scaleG: +sG.toFixed(2), refract: cfg.refractPower, tint: cfg.tint
+    };
+  }
+
+  const svg = document.createElementNS(SVGNS, 'svg');
+  svg.setAttribute('width', '0'); svg.setAttribute('height', '0');
+  svg.setAttribute('aria-hidden', 'true');
+
+  const filter = document.createElementNS(SVGNS, 'filter');
+  filter.id = v.id;
+  filter.setAttribute('color-interpolation-filters', 'sRGB');
+  filter.setAttribute('x', '0'); filter.setAttribute('y', '0');
+  filter.setAttribute('width', '100%'); filter.setAttribute('height', '100%');
+  filter.setAttribute('filterUnits', 'objectBoundingBox');
+  filter.setAttribute('primitiveUnits', 'userSpaceOnUse');
+
+  const im = document.createElementNS(SVGNS, 'feImage');
+  im.setAttribute('href', url);
+  im.setAttributeNS(XLINK, 'xlink:href', url);
+  im.setAttribute('x', '0'); im.setAttribute('y', '0');
+  im.setAttribute('width', String(size)); im.setAttribute('height', String(size));
+  im.setAttribute('preserveAspectRatio', 'none');
+  im.setAttribute('result', 'map');
+
+  const mk = (values, result) => {
+    const e = document.createElementNS(SVGNS, 'feColorMatrix');
+    e.setAttribute('type', 'matrix');
+    e.setAttribute('values', values);
+    e.setAttribute('in', 'SourceGraphic');
+    e.setAttribute('result', result);
+    return e;
+  };
+  const disp = (inRef, scale, result) => {
+    const e = document.createElementNS(SVGNS, 'feDisplacementMap');
+    e.setAttribute('in', inRef); e.setAttribute('in2', 'map');
+    e.setAttribute('scale', String(scale));
+    e.setAttribute('xChannelSelector', 'R');
+    e.setAttribute('yChannelSelector', 'G');
+    e.setAttribute('result', result);
+    return e;
+  };
+  const blend = (a, b, result) => {
+    const e = document.createElementNS(SVGNS, 'feBlend');
+    e.setAttribute('in', a); e.setAttribute('in2', b); e.setAttribute('mode', 'screen');
+    if (result) e.setAttribute('result', result);
+    return e;
+  };
+  // 玻璃染色：折回后的结果整体乘上通道增益（白 = 不变）
+  const tintNode = document.createElementNS(SVGNS, 'feColorMatrix');
+  tintNode.setAttribute('type', 'matrix');
+  tintNode.setAttribute('values',
+    gR.toFixed(4) + ' 0 0 0 0  0 ' + gG.toFixed(4) + ' 0 0 0  0 0 ' + gB.toFixed(4) + ' 0 0  0 0 0 1 0');
+
+  filter.appendChild(im);
+  filter.appendChild(mk('1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0', 'chR'));
+  filter.appendChild(mk('0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0', 'chG'));
+  filter.appendChild(mk('0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0', 'chB'));
+  filter.appendChild(disp('chR', sR, 'dR'));
+  filter.appendChild(disp('chG', sG, 'dG'));
+  filter.appendChild(disp('chB', sB, 'dB'));
+  filter.appendChild(blend('dR', 'dG', 'rg'));
+  filter.appendChild(blend('rg', 'dB', 'refracted'));
+  tintNode.setAttribute('in', 'refracted');
+  filter.appendChild(tintNode);                      // 最后一步即滤镜输出
+
+  svg.appendChild(filter);
+  filterRoot.appendChild(svg);
+  v.built = true;
+  return v.id;
+}
+
+function nearestVariant(size) {
+  let best = variants[0], bd = Infinity;
+  for (let i = 0; i < variants.length; i++) {
+    const d = Math.abs(variants[i].size - size);
+    if (d < bd) { bd = d; best = variants[i]; }
+  }
+  return best;
+}
+
+/* 空闲队列：分帧构建，单次最多占 ~6ms，启动不被阻塞 */
+const buildQueue = [];
+let pumping = false;
+let autoDowngraded = false;
+const idle = window.requestIdleCallback ? (fn) => window.requestIdleCallback(fn, { timeout: 260 }) : (fn) => setTimeout(fn, 24);
+
+function queueVariant(v, priority) {
+  if ((v.built && !v.dirty) || buildQueue.indexOf(v) >= 0) return;
+  if (priority) buildQueue.unshift(v); else buildQueue.push(v);
+  pump();
+}
+function pump() {
+  if (pumping) return;
+  pumping = true;
+  idle(function () {
+    pumping = false;
+    const t0 = performance.now();
+    let spent = 0;
+    while (buildQueue.length && spent < 6) {
+      const v = buildQueue.shift();
+      buildFilter(v);
+      spent = performance.now() - t0;
+      // 首次构建明显偏慢 → 说明设备很弱，直接从低采样率档起步（折射保留）
+      if (spent > 30 && tierIdx === 0 && !autoDowngraded) {
+        autoDowngraded = true;
+        applyTier(1, '首次构建偏慢，已切到低采样率（折射保留）');
+        return;
+      }
+    }
+    if (buildQueue.length) pump();
+  });
+}
+function requestFilter(size) {
+  const v = nearestVariant(size);
+  if (v.built && !v.dirty) return v.id;
+  queueVariant(v, false);
+  return null;
+}
+
+/** 折射参数变了：把所有档位标记为待重建，并同步重建立刻要用的那几个 */
+let rebuildPending = false;
+function invalidateFilters(immediate) {
+  for (let i = 0; i < variants.length; i++) variants[i].dirty = true;
+  if (rebuildPending && !immediate) return;      // 拖滑块时合并到下一帧，避免每毫秒重建
+  rebuildPending = true;
+  const run = function () {
+    rebuildPending = false;
+    const needed = [];
+    for (let i = 0; i < orbs.length; i++) if (needed.indexOf(orbs[i].v) < 0) needed.push(orbs[i].v);
+    if (!needed.length) needed.push(nearestVariant(cfg.size));
+    for (let i = 0; i < needed.length; i++) buildFilter(needed[i]);
+    for (let i = 0; i < orbs.length; i++) {
+      const o = orbs[i];
+      if (o.el.dataset.filter !== o.v.id && !o.el.classList.contains('safe')) {
+        o.el.dataset.filter = o.v.id;
+        o.el.style.backdropFilter = 'url(#' + o.v.id + ')';
+        o.el.style.webkitBackdropFilter = 'url(#' + o.v.id + ')';
+      }
+    }
+  };
+  if (immediate) run();
+  else if (window.requestAnimationFrame) requestAnimationFrame(run);
+  else setTimeout(run, 16);
+}
+
+/* ==========================================================================
+   3. 玻璃体
+   ========================================================================== */
+
+const orbs = [];
+const world = { w: 0, h: 0 };
+let nextId = 1;
+
+/* 初始布局：按屏幕比例摊开，并专门把玻璃放在光斑附近
+   —— 折射需要"有内容可弯折"，落在空白网格上会看不出效果。
+   注意画面左缘要留够空间，否则玻璃会被夹到 x = r 处排成一条竖线。 */
+const SEED_POS = [
+  [0.14, 0.40], [0.40, 0.30], [0.68, 0.62],
+  [0.88, 0.30], [0.26, 0.72], [0.60, 0.24]
+];
+function seedLayout(n) {
+  for (let i = 0; i < n; i++) {
+    const p = SEED_POS[i % SEED_POS.length];
+    const round = Math.floor(i / SEED_POS.length);
+    const jx = round ? (round % 2 ? 0.09 : -0.09) : 0;
+    const jy = round ? 0.10 : 0;
+    // 尺寸随机差：尺寸档位间距约 1.25 倍，所以要能跨过半档才有可见效果
+    const s = cfg.size * (1 + (cfg.sizeVary ? rand(-0.42, 0.42) * cfg.sizeVary : 0));
+    api.add({ x: clamp(p[0] + jx, 0, 1) * world.w, y: clamp(p[1] + jy, 0, 1) * world.h, size: s });
+  }
+}
+
+const TINT = [
+  'rgba(255,255,255,0.022)',
+  'rgba(150,190,255,0.058)',
+  'rgba(255,170,225,0.052)',
+  'rgba(140,255,220,0.048)',
+  'rgba(255,215,150,0.048)'
+];
+
+function resizeWorld() {
+  const r = stage.getBoundingClientRect();
+  world.w = r.width; world.h = r.height;
+  for (let i = 0; i < orbs.length; i++) {
+    const o = orbs[i];
+    o.x = clamp(o.x, o.r, Math.max(o.r, world.w - o.r));
+    o.y = clamp(o.y, o.r, Math.max(o.r, world.h - o.r));
+    o.tx = o.x; o.ty = o.y;
+  }
+}
+
+function makeOrb(x, y, size) {
+  const v = nearestVariant(size);
+  const r = v.size / 2;
+  const el = document.createElement('div');
+  el.className = 'orb' + (cfg.labels ? '' : ' plain');
+  el.style.width = v.size + 'px';
+  el.style.height = v.size + 'px';
+  el.style.setProperty('--tint', TINT[(nextId - 1) % TINT.length]);
+  applyLook(el);
+
+  const glass = document.createElement('div');
+  glass.className = 'glass';
+  const fid = requestFilter(v.size);
+  if (fid) setOrbFilter(el, fid);
+  if (!cfg.refract) disableOrbFilter(el);
+
+  const spec = document.createElement('div'); spec.className = 'spec';
+  const edge = document.createElement('div'); edge.className = 'edge';
+  const pulse = document.createElement('div'); pulse.className = 'pulse';
+  const label = document.createElement('div'); label.className = 'label';
+  const labelText = document.createElement('span'); labelText.textContent = String(v.size);
+  label.appendChild(labelText);
+
+  el.appendChild(glass); el.appendChild(spec); el.appendChild(edge);
+  el.appendChild(pulse); el.appendChild(label);
+  stage.appendChild(el);
+
+  const o = {
+    id: nextId++, el: el, glass: glass, v: v, r: r, size: v.size,
+    x: x, y: y, tx: x, ty: y, vx: 0, vy: 0, rx: 0, ry: 0,
+    grab: false, grabDX: 0, grabDY: 0, dragged: false,
+    ang: rand(-12, 12), tint: TINT[(nextId - 1) % TINT.length]
+  };
+  orbs.push(o);
+  syncCount();
+  applyTransform(o);
+  return o;
+}
+
+function removeOrb(o) {
+  const i = orbs.indexOf(o);
+  if (i < 0) return false;
+  orbs.splice(i, 1);
+  if (o.el.parentNode) o.el.parentNode.removeChild(o.el);
+  syncCount();
+  return true;
+}
+function syncCount() { hudCount.textContent = String(orbs.length); }
+
+/** 唯一允许每帧写入的属性（位移 / 旋转都是 transform，不碰 left/top） */
+function applyTransform(o) {
+  o.el.style.transform = 'translate3d(' + o.rx.toFixed(2) + 'px,' + o.ry.toFixed(2) + 'px,0) rotate(' + o.ang.toFixed(2) + 'deg)';
+}
+
+/* ---- 挂载/摘除折射滤镜（集中在两个函数里，避免各处重复） ---- */
+function setOrbFilter(el, fid) {
+  el.dataset.filter = fid;
+  const parts = ['url(#' + fid + ')'];
+  if (cfg.blur > 0) parts.push('blur(' + cfg.blur + 'px)');
+  el.style.backdropFilter = parts.join(' ');
+  el.style.webkitBackdropFilter = parts.join(' ');
+}
+function disableOrbFilter(el) {
+  el.dataset.filter = 'off';
+  const v = cfg.blur > 0 ? 'blur(' + Math.max(4, cfg.blur) + 'px) saturate(140%)' : 'blur(10px) saturate(140%)';
+  el.style.backdropFilter = v;
+  el.style.webkitBackdropFilter = v;
+}
+/** 把与滤镜无关的外观参数（高光强度等）刷到元素上 */
+function applyLook(el) {
+  el.style.setProperty('--hi', String(cfg.highlight));
+  el.style.setProperty('--hi2', String(cfg.highlight * 0.9));
+  el.style.setProperty('--hi3', String(cfg.highlight * 0.95));
+  if (cfg.tintCss > 0) {
+    const c = hexToRgb(cfg.tint);
+    el.style.setProperty('--tint', 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',' + cfg.tintCss + ')');
+  }
+}
+/** 参数改动后，把所有玻璃的滤镜/外观刷新一遍 */
+function refreshAllOrbs() {
+  for (let i = 0; i < orbs.length; i++) {
+    const o = orbs[i];
+    applyLook(o.el);
+    o.size = o.v.size;
+    o.r = o.v.size / 2;
+    o.el.style.width = o.v.size + 'px';
+    o.el.style.height = o.v.size + 'px';
+    const labelText = o.el.querySelector('.label span');
+    if (labelText) labelText.textContent = String(o.v.size);
+    o.el.classList.toggle('plain', !cfg.labels);
+    if (!cfg.refract) { disableOrbFilter(o.el); continue; }
+    const t = tier();
+    if (!t.refract) { o.el.classList.add('safe'); continue; }
+    o.el.classList.remove('safe');
+    if (o.v.built && !o.v.dirty) setOrbFilter(o.el, o.v.id);
+    else { o.el.dataset.filter = ''; queueVariant(o.v, true); }
+  }
+}
+
+/** 滤镜迟到了：此时元素通常已静止，重绘一次不心疼 */
+function ensureFilter(o) {
+  if (!cfg.refract || tier().refract === false) return;
+  if (o.el.dataset.filter && o.el.dataset.filter !== 'off') return;
+  const fid = requestFilter(o.size);
+  if (!fid) return;
+  setOrbFilter(o.el, fid);
+}
+
+/* ==========================================================================
+   4. 指针交互
+   ========================================================================== */
+
+const pointer = { x: -9999, y: -9999, active: false, down: false };
+const grabbed = [];
+
+function stagePoint(e) {
+  const r = stage.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+/* 命中检测：圆-点判定（用平方距离，避免多余的 sqrt） */
+function hitsOrb(o, px, py) {
+  const dx = px - o.x, dy = py - o.y;
+  return dx * dx + dy * dy <= o.r * o.r;
+}
+function hitTest(px, py) {
+  for (let i = orbs.length - 1; i >= 0; i--) {
+    if (hitsOrb(orbs[i], px, py)) return orbs[i];
+  }
+  return null;
+}
+
+function onDown(e) {
+  const p = stagePoint(e);
+  const o = hitTest(p.x, p.y);
+  if (!o) return;
+  pointer.down = true;
+  document.body.classList.add('grabbing');
+  grabbed.length = 0;
+  if (e.shiftKey) {
+    for (let i = 0; i < orbs.length; i++) {
+      const q = orbs[i];
+      const dx = q.x - p.x, dy = q.y - p.y;
+      if (dx * dx + dy * dy <= (q.r + 90) * (q.r + 90)) grabbed.push(q);
+    }
+  } else {
+    grabbed.push(o);
+  }
+  for (let i = 0; i < grabbed.length; i++) {
+    const q = grabbed[i];
+    q.grab = true; q.dragged = false;
+    q.grabDX = q.x - p.x; q.grabDY = q.y - p.y;
+    q.vx = q.vy = 0;
+    q.el.classList.add('grabbed');
+  }
+  if (cfg.hint) ripple(p.x, p.y);
+  e.preventDefault();
+}
+
+let lastMoveT = 0;
+function onMove(e) {
+  const p = stagePoint(e);
+  pointer.x = p.x; pointer.y = p.y; pointer.active = true;
+  if (!pointer.down || !grabbed.length) return;
+  const now = performance.now();
+  const dt = Math.max(8, now - lastMoveT) / 1000;
+  lastMoveT = now;
+  for (let i = 0; i < grabbed.length; i++) {
+    const q = grabbed[i];
+    const nx = p.x + q.grabDX, ny = p.y + q.grabDY;
+    q.vx = clamp((nx - q.tx) / dt, -4200, 4200);
+    q.vy = clamp((ny - q.ty) / dt, -4200, 4200);
+    q.tx = nx; q.ty = ny; q.dragged = true;
+  }
+}
+
+function onUp() {
+  if (!pointer.down) return;
+  pointer.down = false;
+  document.body.classList.remove('grabbing');
+  for (let i = 0; i < grabbed.length; i++) {
+    const q = grabbed[i];
+    q.grab = false;
+    q.el.classList.remove('grabbed');
+    if (!q.dragged) { q.vx = 0; q.vy = 0; }
+    q.vx = clamp(q.vx, -2600, 2600);
+    q.vy = clamp(q.vy, -2600, 2600);
+  }
+  grabbed.length = 0;
+}
+
+stage.addEventListener('pointerdown', onDown);
+window.addEventListener('pointermove', onMove, { passive: true });
+window.addEventListener('pointerup', onUp);
+window.addEventListener('pointercancel', onUp);
+window.addEventListener('blur', onUp);
+stage.addEventListener('pointerleave', function () { pointer.active = false; });
+
+stage.addEventListener('dblclick', function (e) {
+  const p = stagePoint(e);
+  const o = hitTest(p.x, p.y);
+  if (o) removeOrb(o);
+  else makeOrb(p.x, p.y, nearestVariant(cfg.size).size);
+});
+
+function ripple(x, y) {
+  const d = document.createElement('div');
+  d.className = 'ripple';
+  d.style.left = x + 'px'; d.style.top = y + 'px';
+  stage.appendChild(d);
+  setTimeout(function () { if (d.parentNode) d.parentNode.removeChild(d); }, 760);
+}
+
+/* ==========================================================================
+   5. 物理 + 渲染（单次 rAF）
+   ========================================================================== */
+
+const BOUNCE = 0.62, REST = 0.66, TENSION = 42, REPEL_R = 190;
+
+let fpsAcc = 0, fpsFrames = 0, lowStreak = 0, okStreak = 0, lastFps = 0;
+let drawHook = null;
+
+function step(dt) {
+  const dtS = Math.min(dt, 1 / 30);
+  const n = orbs.length;
+  if (!n) return;
+
+  // 指针斥力（纯视觉反馈）
+  if (cfg.repel && pointer.active && !pointer.down) {
+    for (let i = 0; i < n; i++) {
+      const o = orbs[i];
+      const dx = o.x - pointer.x, dy = o.y - pointer.y;
+      const d2 = dx * dx + dy * dy;
+      const R = o.r + REPEL_R;
+      if (d2 < R * R && d2 > 1) {
+        const d = Math.sqrt(d2);
+        const f = (1 - d / R) * 260;
+        o.vx += dx / d * f * dtS;
+        o.vy += dy / d * f * dtS;
+      }
+    }
+  }
+
+  if (cfg.collide || tensionOn) {
+    let maxR = 0;
+    for (let i = 0; i < n; i++) if (orbs[i].r > maxR) maxR = orbs[i].r;
+    const cull2 = (maxR * 2 + 150) * (maxR * 2 + 150);
+    for (let i = 0; i < n; i++) {
+      const a = orbs[i], ar = a.r;
+      for (let j = i + 1; j < n; j++) {
+        const b = orbs[j];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 > cull2 || d2 < 1e-6) continue;
+        const minD = ar + b.r;
+        const reach = minD + (tensionOn ? 96 : 0);
+        if (d2 > reach * reach) continue;
+        const d = Math.sqrt(d2);
+        const nx = dx / d, ny = dy / d;
+
+        if (tensionOn && d > minD && d < minD + 96 && !a.grab && !b.grab) {
+          const f = (1 - (d - minD) / 96) * TENSION;
+          a.vx += nx * f * dtS; a.vy += ny * f * dtS;
+          b.vx -= nx * f * dtS; b.vy -= ny * f * dtS;
+        }
+        if (cfg.collide && d < minD) {
+          const overlap = minD - d;
+          const totalM = ar * ar + b.r * b.r;
+          const wa = b.r * b.r / totalM, wb = ar * ar / totalM;
+          if (!a.grab) { a.x -= nx * overlap * wa; a.y -= ny * overlap * wa; }
+          if (!b.grab) { b.x += nx * overlap * wb; b.y += ny * overlap * wb; }
+          const vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+          if (vn < 0) {
+            const jimp = -(1 + REST) * vn / (wa + wb);
+            if (!a.grab) { a.vx -= jimp * wa * nx; a.vy -= jimp * wa * ny; }
+            if (!b.grab) { b.vx += jimp * wb * nx; b.vy += jimp * wb * ny; }
+          }
+        }
+      }
+    }
+  }
+
+  for (let i = 0; i < n; i++) {
+    const o = orbs[i];
+    if (o.grab) {
+      if (cfg.dragFollow >= 0.999) {
+        // 完全跟手：直接吸附到指针，不经过弹簧（1:1，没有滞后）
+        o.x = o.tx; o.y = o.ty;
+        o.vx = o.vy = 0;
+      } else {
+        // 临界阻尼弹簧：有粘滞感又不脱手
+        const k = cfg.dragFollow, damp = 0.62;
+        o.vx = (o.vx + (o.tx - o.x) * k) * damp;
+        o.vy = (o.vy + (o.ty - o.y) * k) * damp;
+      }
+    } else {
+      // 空气阻尼：每帧乘 factor。注意 friction = 0 表示"完全不减速"，
+      // 而 Math.pow(0, x) === 0 会把速度直接乘成 0（且 dt=0 时还是 NaN），
+      // 所以这里必须显式区分「无阻尼」和「有阻尼」，不能统一套公式。
+      if (cfg.friction > 0.0001 && cfg.friction < 1) {
+        const fr = Math.pow(cfg.friction, dtS * 60);
+        o.vx *= fr; o.vy *= fr;
+        if (Math.abs(o.vx) < 0.5) o.vx = 0;
+        if (Math.abs(o.vy) < 0.5) o.vy = 0;
+      }
+    }
+    o.x += o.vx * dtS;
+    o.y += o.vy * dtS;
+
+    if (cfg.bounce) {
+      const maxX = Math.max(o.r, world.w - o.r), maxY = Math.max(o.r, world.h - o.r);
+      if (o.x < o.r) { o.x = o.r; o.vx = Math.abs(o.vx) * BOUNCE; }
+      else if (o.x > maxX) { o.x = maxX; o.vx = -Math.abs(o.vx) * BOUNCE; }
+      if (o.y < o.r) { o.y = o.r; o.vy = Math.abs(o.vy) * BOUNCE; }
+      else if (o.y > maxY) { o.y = maxY; o.vy = -Math.abs(o.vy) * BOUNCE; }
+    }
+    if (cfg.spin && !o.grab) o.ang += (o.vx * 0.045 + o.vy * 0.02) * dtS;
+
+    o.rx = o.x - o.r;
+    o.ry = o.y - o.r;
+  }
+}
+
+function render() {
+  const lx = world.w ? clamp((pointer.x / world.w - 0.5) * 2, -1, 1) : 0;
+  const ly = world.h ? clamp((pointer.y / world.h - 0.5) * 2, -1, 1) : 0;
+  // 高光只跟指针走；指针不动时这几个变量完全不变，没必要每帧重写
+  const lxS = lx.toFixed(3), lyS = ly.toFixed(3);
+  const angS = String((lx * 40) | 0);
+  const lightChanged = (lxS !== render.lx || lyS !== render.ly || angS !== render.ang);
+  render.lx = lxS; render.ly = lyS; render.ang = angS;
+
+  for (let i = 0; i < orbs.length; i++) {
+    const o = orbs[i];
+    applyTransform(o);
+    if (!o.el.dataset.filter || o.el.dataset.filter === 'off') ensureFilter(o);
+    if (lightChanged) {
+      o.el.style.setProperty('--lx', lxS);
+      o.el.style.setProperty('--ly', lyS);
+    }
+    if (cfg.spin) {
+      const a = String((o.ang * 0.6 + lx * 40) | 0);
+      if (a !== o.lastAng) { o.el.style.setProperty('--ang', a); o.lastAng = a; }
+    } else if (lightChanged) {
+      o.el.style.setProperty('--ang', angS);
+    }
+  }
+}
+
+let prevT = performance.now();
+const FT_N = 180;
+const frameTimes = new Float32Array(FT_N);
+let frameCount = 0;
+
+function frameStats() {
+  const n = Math.min(frameCount, FT_N);
+  if (!n) return { n: 0, orbs: orbs.length, avg: 0, p95: 0, fps: 0, over33: 0 };
+  const arr = Array.prototype.slice.call(frameTimes, 0, n).sort(function (a, b) { return a - b; });
+  let sum = 0, over = 0;
+  for (let i = 0; i < n; i++) { sum += arr[i]; if (arr[i] > 33.4) over++; }
+  const avg = sum / n;
+  return { n: n, orbs: orbs.length, avg: +avg.toFixed(2), p95: +arr[(n * 0.95) | 0].toFixed(2), fps: +(1000 / avg).toFixed(1), over33: +(over / n * 100).toFixed(1) };
+}
+
+function loop(now) {
+  const dt = (now - prevT) / 1000;
+  prevT = now;
+  if (dt > 0 && dt < 0.5) { frameTimes[frameCount % FT_N] = dt * 1000; frameCount++; }
+
+  step(dt);
+  render();
+  if (drawHook) { try { drawHook(); } catch (e) { /* 隔离宿主回调异常 */ } }
+
+  // —— 掉帧自适应：分级降级，优先"降采样率"而不是"关掉折射" ——
+  fpsAcc += dt; fpsFrames++;
+  if (fpsAcc >= 0.5) {
+    const fps = fpsFrames / fpsAcc;
+    fpsAcc = 0; fpsFrames = 0;
+    lastFps = +fps.toFixed(1);
+    hudFpsVal.textContent = fps >= 100 ? String(Math.round(fps)) : fps.toFixed(0);
+    hudFps.classList.toggle('bad', fps < 40);
+    hudFps.classList.toggle('warn', fps >= 40 && fps < 55);
+    if (window.__lg && window.__lg.trace) window.__lg.trace.push('fps=' + fps.toFixed(1) + ' tier=' + tierIdx + ' low=' + lowStreak + ' ok=' + okStreak);
+    if (cfg.adaptive === 'auto') {
+      if (fps < 50) lowStreak++; else lowStreak = 0;
+      if (fps > 56) okStreak++; else okStreak = 0;
+
+      if (tierIdx < TIERS.length - 1) {
+        const limit = tierIdx === 0 ? 3 : 5;
+        const hardLimit = fps < 30 ? 5 : Infinity;
+        if (lowStreak >= limit || lowStreak >= hardLimit) {
+          applyTier(tierIdx + 1, autoReason(tierIdx + 1));
+          lowStreak = 0;
+        }
+      }
+      if (tierIdx > 0 && okStreak >= 10) {
+        applyTier(tierIdx - 1, null);
+        okStreak = 0;
+      }
+    }
+  }
+  requestAnimationFrame(loop);
+}
+
+/* ==========================================================================
+   6. 公开 API（父页面可 iframe.contentWindow.liquidGlass 调用）
+   ========================================================================== */
+
+function autoReason(next) {
+  return TIERS[next].refract
+    ? '检测到掉帧，已降低折射采样率（折射保留，只是边缘精度略降）'
+    : '持续掉帧，已暂时关闭折射以保流畅（可在 HUD 切回）';
+}
+
+/** 切换质量档位：重算采样率并按需重建滤镜 */
+function applyTier(idx, hint) {
+  if (window.__lg && window.__lg.trace) window.__lg.trace.push('applyTier(' + idx + ') from ' + tierIdx + ' @' + Math.round(performance.now()));
+  idx = Math.max(0, Math.min(TIERS.length - 1, idx));
+  tierIdx = idx;
+  const t = tier();
+  // 重置迟滞计数：否则「切档前攒够的恢复计数」会让刚降下来的档位立刻被升回去
+  lowStreak = 0;
+  okStreak = 0;
+
+  for (let i = 0; i < variants.length; i++) {
+    if (variants[i].rs !== mapRes(variants[i].size)) variants[i].dirty = true;
+  }
+  const needed = [];
+  for (let i = 0; i < orbs.length; i++) if (needed.indexOf(orbs[i].v) < 0) needed.push(orbs[i].v);
+  if (!needed.length) needed.push(nearestVariant(cfg.size));
+  for (let i = 0; i < needed.length; i++) buildFilter(needed[i]);
+
+  const refract = t.refract && cfg.refract;
+  for (let i = 0; i < orbs.length; i++) {
+    const o = orbs[i];
+    o.el.classList.toggle('safe', !refract);
+    if (refract) { o.el.dataset.filter = o.v.id; setOrbFilter(o.el, o.v.id); }
+    else disableOrbFilter(o.el);
+  }
+  syncHudState();
+  if (hint) showHint(hint);
+}
+
+/** 把当前质量状态刷到 HUD 状态点与按钮上 */
+function syncHudState() {
+  const t = tier();
+  hudDot.classList.toggle('warn', t.refract && tierIdx > 0);
+  hudDot.classList.toggle('off', !t.refract);
+  hudDot.title = (t.refract && tierIdx === 0) ? '折射质量：完整'
+    : (!t.refract ? '折射已关闭（性能自适应）' : '折射质量：已降采样率（折射保留）') + ' · 点此切换';
+  const btn = document.getElementById('btnQuality');
+  if (btn) {
+    btn.classList.toggle('on', cfg.adaptive === 'auto');
+    btn.title = '折射质量：' + (cfg.adaptive === 'auto' ? '自动' : (cfg.adaptive === 'high' ? '锁定完整' : '锁定低采样')) +
+      '（当前 ' + t.name + '，点此切换）';
+  }
+}
+
+function publicState(o) {
+  return { id: o.id, x: o.x, y: o.y, r: o.r, size: o.size, vx: o.vx, vy: o.vy, el: o.el, grabbed: o.grab };
+}
+
+const listeners = Object.create(null);
+function emit(name, payload) {
+  const l = listeners[name];
+  if (l) for (let i = 0; i < l.length; i++) { try { l[i](payload); } catch (e) { /* 忽略宿主异常 */ } }
+}
+
+/* 设定某个参数（内部统一入口，面板与 API 都走这里） */
+function applyParam(key, value, opts) {
+  opts = opts || {};
+  if (!(key in cfg) && key !== 'tension') return false;
+  const prev = key === 'tension' ? tensionOn : cfg[key];
+
+  if (key === 'tension') { tensionOn = !!value; }
+  else if (key === 'refract') cfg.refract = !!value;
+  else if (key === 'adaptive') cfg.adaptive = ['auto', 'high', 'low'].indexOf(value) >= 0 ? value : 'auto';
+  else if (key === 'tint') cfg.tint = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(String(value)) ? String(value) : '#ffffff';
+  else if (key === 'size') cfg.size = clamp(num(value, 160), 40, 720);
+  else if (key === 'count') return api.setCount(value) && true;
+  else if (typeof cfg[key] === 'boolean') cfg[key] = !!value;
+  else cfg[key] = num(value, cfg[key]);
+
+  // —— 副作用分三类处理 ——
+  if (key === 'hud') document.body.classList.toggle('hud-hidden', !cfg.hud);
+  else if (key === 'panel') togglePanel(!!cfg.panel);
+  else if (key === 'bg') document.body.classList.toggle('no-bg', !cfg.bg);
+  else if (key === 'drift') document.body.classList.toggle('with-drift', cfg.drift);
+  else if (key === 'labels') for (let i = 0; i < orbs.length; i++) orbs[i].el.classList.toggle('plain', !cfg.labels);
+
+  if (key === 'adaptive') {
+    if (cfg.adaptive === 'high') applyTier(0, null);
+    else if (cfg.adaptive === 'low') applyTier(1, null);
+    else syncHudState();
+  } else if (key === 'refract') {
+    applyTier(cfg.refract ? 0 : TIERS.length - 1, null);
+  } else if (key === 'size') {
+    api.setSize(cfg.size);
+  } else if (key === 'count') {
+    /* setCount 已经处理 */
+  } else if (key === 'blur' || key === 'highlight' || key === 'tintCss' || key === 'labels') {
+    refreshAllOrbs();                                  // 纯 CSS，立即生效
+  } else if (['bezel', 'thickness', 'refractPower', 'chroma', 'mapScale', 'samples', 'tint'].indexOf(key) >= 0) {
+    invalidateFilters(key !== 'samples');              // 折射参数 → 重建滤镜
+  }
+
+  if (!opts.silent && prev !== (key === 'tension' ? tensionOn : cfg[key])) {
+    emit('change', { key: key, value: key === 'tension' ? tensionOn : cfg[key], prev: prev });
+  }
+  if (!opts.noUi) syncUI(key);
+  return true;
+}
+
+const api = {
+  version: '3.0',
+  get orbs() { return orbs.map(publicState); },
+  get count() { return orbs.length; },
+  get frameStats() { return frameStats(); },
+  get fps() { return lastFps; },
+  get degraded() { return tierIdx > 0; },
+  get quality() { return tier().name; },
+  /** 当前全部参数（含尺寸档位等派生值） */
+  get config() {
+    return Object.assign({}, cfg, {
+      tension: tensionOn,
+      quality: tier().name,
+      realMapRes: orbs.length ? orbs[0].v.rs : mapRes(cfg.size)
+    });
+  },
+  /** 可调参数清单（面板就是用它生成的；宿主可据此自建 UI） */
+  get params() { return PARAMS.map(function (p) { return Object.assign({}, p); }); },
+
+  add(opt) {
+    opt = opt || {};
+    // 注意：这里不要把尺寸吸附到档位——吸附会让 sizeVary 完全失效（都被吸回同一个档）。
+    // 吸附由 makeOrb → nearestVariant 负责，传入的尺寸只是"想要的尺寸"。
+    const size = num(opt.size != null ? opt.size : cfg.size, 160);
+    const v = nearestVariant(size);
+    const r = v.size / 2;
+    let x = opt.x, y = opt.y;
+    if (x == null || y == null) {
+      const loX = r + 4, hiX = world.w - r - 4;
+      const loY = r + 4, hiY = world.h - r - 4;
+      let candX = [rand(Math.min(loX, hiX), Math.max(loX, hiX))];
+      let candY = [rand(Math.min(loY, hiY), Math.max(loY, hiY))];
+      if (orbs.length) {
+        for (let t = 0; t < 20; t++) {
+          candX.push(rand(Math.min(loX, hiX), Math.max(loX, hiX)));
+          candY.push(rand(Math.min(loY, hiY), Math.max(loY, hiY)));
+        }
+      }
+      let bestX = candX[0], bestY = candY[0], bestGap = -Infinity;
+      for (let t = 0; t < candX.length; t++) {
+        let gap = Infinity;
+        for (let i = 0; i < orbs.length; i++) {
+          gap = Math.min(gap, Math.hypot(orbs[i].x - candX[t], orbs[i].y - candY[t]) - orbs[i].r);
+        }
+        if (gap > bestGap) { bestGap = gap; bestX = candX[t]; bestY = candY[t]; }
+        if (bestGap > r) break;
+      }
+      x = bestX; y = bestY;
+    }
+    const o = makeOrb(clamp(x, r, Math.max(r, world.w - r)), clamp(y, r, Math.max(r, world.h - r)), size);
+    if (opt.tint) { o.tint = opt.tint; o.el.style.setProperty('--tint', opt.tint); }
+    if (opt.vx || opt.vy) { o.vx = opt.vx || 0; o.vy = opt.vy || 0; }
+    emit('add', publicState(o));
+    return {
+      id: o.id,
+      setPos(nx, ny, instant) { o.tx = nx; o.ty = ny; if (instant) { o.x = nx; o.y = ny; } return this; },
+      setVel(nvx, nvy) { o.vx = nvx; o.vy = nvy; return this; },
+      setSize(s) {
+        const v = nearestVariant(s);
+        o.v = v; o.size = v.size; o.r = v.size / 2;
+        o.el.style.width = v.size + 'px'; o.el.style.height = v.size + 'px';
+        const labelText = o.el.querySelector('.label span');
+        if (labelText) labelText.textContent = String(v.size);
+        if (v.built && !v.dirty) setOrbFilter(o.el, v.id); else { o.el.dataset.filter = ''; queueVariant(v, true); }
+        return this;
+      },
+      setTint(t) { o.tint = t; o.el.style.setProperty('--tint', t || 'rgba(255,255,255,0)'); return this; },
+      remove() { return removeOrb(o); }
+    };
+  },
+  remove() { return orbs.length ? removeOrb(orbs[orbs.length - 1]) : false; },
+  clear() { while (orbs.length) removeOrb(orbs[0]); return api; },
+
+  setCount(n) {
+    n = Math.max(0, Math.min(24, Math.round(n) || 0));
+    while (orbs.length > n) removeOrb(orbs[orbs.length - 1]);
+    while (orbs.length < n) api.add();
+    cfg.count = orbs.length;
+    syncUI('count');
+    return api;
+  },
+
+  /** 设置默认尺寸，并立即套用到现有玻璃 */
+  setSize(size) {
+    cfg.size = clamp(num(size, 160), 40, 720);
+    for (let i = 0; i < orbs.length; i++) {
+      const o = orbs[i], v = nearestVariant(cfg.size);
+      if (v.size === o.size) continue;
+      o.v = v; o.size = v.size; o.r = v.size / 2;
+      o.el.style.width = v.size + 'px'; o.el.style.height = v.size + 'px';
+      const labelText = o.el.querySelector('.label span');
+      if (labelText) labelText.textContent = String(v.size);
+      if (v.built && !v.dirty) setOrbFilter(o.el, v.id);
+      else { o.el.dataset.filter = ''; queueVariant(v, true); }
+    }
+    syncUI('size');
+    return api;
+  },
+
+  /** 设置任意参数：set('refractPower', 0.6) / set('blur', 6) / set('tint', '#7fd4ff') ... */
+  set(key, value) {
+    if (key === 'quality') { applyTier(TIERS.findIndex(function (t) { return t.name === value; }), null); return api; }
+    applyParam(key, value);
+    return api;
+  },
+  get(key) {
+    if (key === 'tension') return tensionOn;
+    if (key === 'quality') return tier().name;
+    return cfg[key];
+  },
+
+  /** 批量设置：configure({ size: 200, count: 4, refractPower: 0.7, blur: 3 }) */
+  configure(o) {
+    for (const k in o) api.set(k, o[k]);
+    return api;
+  },
+
+  /** 恢复默认参数（可只恢复一类：'refract' | 'look' | 'motion' | 'all'） */
+  reset(group) {
+    group = group || 'all';
+    for (let i = 0; i < PARAMS.length; i++) {
+      const p = PARAMS[i];
+      if (group !== 'all' && p.group !== group) continue;
+      api.set(p.key, DEFAULTS[p.key]);
+    }
+    if (group === 'all' || group === 'motion') api.setCount(DEFAULTS.count);
+    return api;
+  },
+
+  impulse(power) {
+    power = power || 1;
+    for (let i = 0; i < orbs.length; i++) {
+      if (orbs[i].grab) continue;
+      const a = Math.random() * Math.PI * 2, s = rand(420, 1100) * power;
+      orbs[i].vx += Math.cos(a) * s;
+      orbs[i].vy += Math.sin(a) * s;
+    }
+    return api;
+  },
+
+  gather(radius) {
+    const cx = world.w / 2, cy = world.h / 2;
+    radius = radius || 130;
+    for (let i = 0; i < orbs.length; i++) {
+      const o = orbs[i];
+      if (o.grab) continue;
+      const a = i / Math.max(1, orbs.length) * Math.PI * 2;
+      o.tx = cx + Math.cos(a) * radius;
+      o.ty = cy + Math.sin(a) * radius;
+      o.vx += (o.tx - o.x) * 1.6;
+      o.vy += (o.ty - o.y) * 1.6;
+    }
+    return api;
+  },
+
+  /** 显示/隐藏参数面板 */
+  showPanel(on) { togglePanel(on == null ? !panelOpen : !!on); return api; },
+
+  onDraw(fn) { drawHook = typeof fn === 'function' ? fn : null; return api; },
+  /** 事件：'add' | 'change' */
+  on(name, fn) { (listeners[name] || (listeners[name] = [])).push(fn); return api; },
+  off(name, fn) {
+    const l = listeners[name];
+    if (l) { const i = l.indexOf(fn); if (i >= 0) l.splice(i, 1); }
+    return api;
+  },
+
+  /** 立即构建全部档位的滤镜（默认懒加载） */
+  preload() {
+    for (let i = 0; i < variants.length; i++) queueVariant(variants[i], false);
+    return api;
+  }
+};
+window.liquidGlass = api;
+
+// 调试/标定出口
+window.__lg = { orbs: orbs, variants: variants, cfg: cfg, frameStats: frameStats, api: api, debug: {}, trace: [] };
+
+/* ==========================================================================
+   7. 参数面板（由 PARAMS 生成，和接口是同一套参数）
+   ========================================================================== */
+
+const DEFAULTS = {
+  count: 3, size: 160, sizeVary: 0.5,
+  refract: true, refractPower: 0.45, bezel: 0.20, thickness: 0.93, chroma: 1,
+  mapScale: 1.05, samples: 128, blur: 0, tint: '#ffffff', tintCss: 0.03, highlight: 1,
+  repel: false, tension: false, collide: false, bounce: true, spin: false, drift: false,
+  friction: 0.955, dragFollow: 0.30,
+  hud: true, panel: false, hint: true, bg: true, labels: false, adaptive: 'auto'
+};
+
+const PARAMS = [
+  { group: 'geometry', key: 'size',        label: '玻璃大小',   min: 40,  max: 400, step: 1,    fmt: v => v + ' px' },
+  { group: 'geometry', key: 'count',       label: '数量',       min: 0,   max: 24,  step: 1,    fmt: v => String(v) },
+  { group: 'geometry', key: 'sizeVary',    label: '大小随机差', min: 0,   max: 1,   step: 0.02, fmt: v => Math.round(v * 100) + '%' },
+  { group: 'refract',  key: 'refractPower',label: '折射强度',   min: 0.02,max: 1.6, step: 0.01, fmt: v => v.toFixed(2) },
+  { group: 'refract',  key: 'bezel',       label: '折射范围',   min: 0.03,max: 0.5, step: 0.005,fmt: v => Math.round(v * 100) + '% 直径' },
+  { group: 'refract',  key: 'thickness',   label: '玻璃厚度',   min: 0.1, max: 3,   step: 0.01, fmt: v => v.toFixed(2) },
+  { group: 'refract',  key: 'chroma',      label: '边缘色散',   min: 0,   max: 3,   step: 0.05, fmt: v => v.toFixed(2) },
+  { group: 'refract',  key: 'mapScale',    label: '折射采样率', min: 0.4, max: 1.6, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
+  { group: 'refract',  key: 'samples',     label: '剖面精度',   min: 24,  max: 256, step: 8,    fmt: v => String(v) },
+  { group: 'refract',  key: 'blur',        label: '背景模糊度', min: 0,   max: 30,  step: 0.5,  fmt: v => v.toFixed(1) + ' px' },
+  { group: 'look',     key: 'tint',        label: '玻璃颜色',   type: 'color' },
+  { group: 'look',     key: 'tintCss',     label: '颜色覆盖',   min: 0,   max: 0.5, step: 0.01, fmt: v => Math.round(v * 100) + '%' },
+  { group: 'look',     key: 'highlight',   label: '高光强度',   min: 0,   max: 2,   step: 0.05, fmt: v => v.toFixed(2) },
+  { group: 'look',     key: 'labels',      label: '显示标签',   type: 'bool' },
+  { group: 'motion',   key: 'dragFollow',  label: '跟手程度',   min: 0.05,max: 1,   step: 0.01, fmt: v => v >= 1 ? '完全跟手 1:1' : v.toFixed(2) },
+  { group: 'motion',   key: 'friction',    label: '空气阻尼',   min: 0,   max: 1,   step: 0.005,fmt: v => v <= 0.001 ? '无阻尼' : v.toFixed(3) },
+  { group: 'motion',   key: 'bounce',      label: '边界回弹',   type: 'bool' },
+  { group: 'motion',   key: 'collide',     label: '互相碰撞',   type: 'bool' },
+  { group: 'motion',   key: 'tension',     label: '表面张力',   type: 'bool' },
+  { group: 'motion',   key: 'repel',       label: '指针斥力',   type: 'bool' },
+  { group: 'motion',   key: 'spin',        label: '自转',       type: 'bool' },
+  { group: 'scene',    key: 'drift',       label: '背景光斑动', type: 'bool' },
+  { group: 'scene',    key: 'bg',          label: '内置背景',   type: 'bool' }
+];
+const GROUP_TITLE = { geometry: '几何', refract: '折射', look: '外观', motion: '交互', scene: '场景' };
+
+let panelOpen = false;
+const uiRefs = Object.create(null);
+
+function buildPanel() {
+  const frag = document.createDocumentFragment();
+  let curGroup = null;
+  for (let i = 0; i < PARAMS.length; i++) {
+    const p = PARAMS[i];
+    if (p.group !== curGroup) {
+      curGroup = p.group;
+      const h = document.createElement('h4');
+      h.textContent = GROUP_TITLE[curGroup] || curGroup;
+      frag.appendChild(h);
+    }
+    if (p.type === 'bool') {
+      const row = document.createElement('label');
+      row.className = 'sw';
+      const name = document.createElement('span'); name.className = 'name'; name.textContent = p.label;
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.dataset.key = p.key;
+      input.addEventListener('change', function () { api.set(p.key, this.checked); });
+      row.appendChild(name); row.appendChild(input);
+      uiRefs[p.key] = input;
+      frag.appendChild(row);
+      continue;
+    }
+    if (p.type === 'color') {
+      const row = document.createElement('div');
+      row.className = 'sw color-row';
+      const name = document.createElement('span'); name.className = 'name'; name.textContent = p.label;
+      const input = document.createElement('input');
+      input.type = 'color';
+      input.dataset.key = p.key;
+      input.addEventListener('input', function () { api.set(p.key, this.value); });
+      row.appendChild(name); row.appendChild(input);
+      uiRefs[p.key] = input;
+      frag.appendChild(row);
+      continue;
+    }
+    const row = document.createElement('div');
+    row.className = 'row';
+    const top = document.createElement('div'); top.className = 'top';
+    const name = document.createElement('span'); name.className = 'name'; name.textContent = p.label;
+    const val = document.createElement('span'); val.className = 'val';
+    top.appendChild(name); top.appendChild(val);
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = p.min; input.max = p.max; input.step = p.step;
+    input.dataset.key = p.key;
+    input.addEventListener('input', function () { api.set(p.key, parseFloat(this.value)); });
+    row.appendChild(top); row.appendChild(input);
+    uiRefs[p.key] = { input: input, val: val, p: p };
+    frag.appendChild(row);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const mkBtn = (text, fn) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = text;
+    b.addEventListener('click', fn);
+    return b;
+  };
+  actions.appendChild(mkBtn('恢复默认', function () { api.reset('all'); showHint('已恢复默认参数'); }));
+  actions.appendChild(mkBtn('重置位置', function () {
+    api.clear(); seedLayout(Math.max(1, Math.round(cfg.count)));
+    showHint('已重新排布');
+  }));
+  frag.appendChild(actions);
+
+  panelEl.appendChild(frag);
+  syncUI();
+}
+
+/** 把值写回控件（参数从接口侧改动时也能同步） */
+function syncUI(only) {
+  for (let i = 0; i < PARAMS.length; i++) {
+    const p = PARAMS[i];
+    if (only && p.key !== only && only !== 'all') continue;
+    const ref = uiRefs[p.key];
+    if (!ref) continue;
+    const v = p.key === 'count' ? orbs.length : (p.key === 'tension' ? tensionOn : cfg[p.key]);
+    if (p.type === 'bool') ref.checked = !!v;
+    else if (p.type === 'color') ref.value = v;
+    else {
+      if (Number(ref.input.value) !== Number(v)) ref.input.value = String(v);
+      ref.val.textContent = p.fmt ? p.fmt(Number(v)) : String(v);
+    }
+  }
+}
+
+function togglePanel(on) {
+  panelOpen = on == null ? !panelOpen : !!on;
+  cfg.panel = panelOpen;
+  panelEl.classList.toggle('open', panelOpen);
+  const btn = document.getElementById('btnPanel');
+  if (btn) btn.classList.toggle('on', panelOpen);
+}
+
+/* ==========================================================================
+   8. 启动
+   ========================================================================== */
+
+document.getElementById('btnAdd').addEventListener('click', function () { api.add(); });
+document.getElementById('btnRemove').addEventListener('click', function () { api.remove(); });
+document.getElementById('btnClear').addEventListener('click', function () { api.clear(); });
+document.getElementById('btnPanel').addEventListener('click', function () { togglePanel(); });
+
+/** 短暂提示（复用底部那条气泡） */
+let hintTimer = 0;
+function showHint(text, ms) {
+  if (!cfg.hud) return;
+  hintEl.textContent = text;
+  hintEl.classList.add('show');
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(function () { hintEl.classList.remove('show'); }, ms || 2400);
+}
+
+(function () {
+  const btn = document.getElementById('btnQuality');
+  const order = ['auto', 'high', 'low'];
+  btn.addEventListener('click', function () {
+    const i = order.indexOf(cfg.adaptive);
+    const next = order[(i + 1) % order.length];
+    api.set('adaptive', next);
+    showHint(next === 'auto' ? '折射质量：自动（掉帧时先降采样率，仍保留折射）'
+      : (next === 'high' ? '折射质量：锁定完整（不做自动降级）'
+                         : '折射质量：锁定低采样（折射保留，更省性能）'));
+  });
+  hudDot.addEventListener('click', function () {
+    api.set('adaptive', 'auto');
+    showHint('折射质量：自动');
+  });
+})();
+
+function boot() {
+  document.body.classList.toggle('hud-hidden', !cfg.hud);
+  document.body.classList.toggle('no-bg', !cfg.bg);
+  document.body.classList.toggle('with-drift', !!cfg.drift);
+  resizeWorld();
+
+  if (cfg.adaptive === 'high') tierIdx = 0;
+  else if (cfg.adaptive === 'low') tierIdx = 1;
+  syncHudState();
+
+  buildPanel();
+  if (cfg.panel) togglePanel(true);
+
+  // 当前尺寸要用的档位优先构建，其余交给空闲时间
+  const first = nearestVariant(cfg.size);
+  queueVariant(first, true);
+  for (let i = 0; i < variants.length; i++) if (variants[i] !== first) queueVariant(variants[i], false);
+
+  seedLayout(Math.max(0, Math.min(24, Math.round(cfg.count))));
+  syncUI('count');
+
+  requestAnimationFrame(loop);
+
+  let rt = 0;
+  window.addEventListener('resize', function () {
+    clearTimeout(rt);
+    rt = setTimeout(resizeWorld, 120);
+  });
+
+  if (cfg.hud && cfg.hint) {
+    setTimeout(function () { hintEl.classList.add('show'); }, 500);
+    setTimeout(function () { hintEl.classList.remove('show'); }, 5200);
+    window.addEventListener('pointerdown', function () { hintEl.classList.remove('show'); }, { once: true });
+  }
+
+  // 兜底：滤镜就绪后把临时毛玻璃换掉（新增的玻璃也照顾到）
+  setInterval(function () {
+    for (let i = 0; i < orbs.length; i++) {
+      const o = orbs[i];
+      if (!o.el.dataset.filter || o.el.dataset.filter === 'off') ensureFilter(o);
+    }
+  }, 250);
+
+  // 拖拽/点选时按 Esc 关面板
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && panelOpen) togglePanel(false);
+  });
+}
+
+boot();
+
+})();
+</script>
+</body>
+</html>
