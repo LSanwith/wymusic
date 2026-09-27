@@ -406,15 +406,6 @@ curl -s {origin}/search?keywords=网易云</code></pre>
         </footer>
     </main>
 
-    <!-- 液态玻璃浮层（装饰）：透明嵌入 bg=none，玻璃真实折射本页内容；hud=0 隐藏全部控件。
-         内联 pointer-events:none 让点击默认穿透到页面，只有指针真的落在玻璃上时
-         才由下面的脚本临时接管事件 —— 所以页面的链接 / 按钮完全不受影响。 -->
-    <iframe id="lgLayer"
-            src="liquid-glass.html?hud=0&amp;bg=none&amp;size=160&amp;count=3"
-            title="液态玻璃装饰层"
-            aria-hidden="true"
-            style="position:fixed;inset:0;width:100%;height:100%;border:0;background:transparent;z-index:30;pointer-events:none"></iframe>
-
     <script>
         (function() {
             document.addEventListener('contextmenu', e => e.preventDefault());
@@ -565,77 +556,10 @@ curl -s {origin}/search?keywords=网易云</code></pre>
         })();
     </script>
 
+    <!-- 液态玻璃卡片：把 .block 原来的假毛玻璃换成真实背景折射（feDisplacementMap） -->
+    <script src="liquid-glass-panel.js" defer></script>
+
     <!-- Vercel Speed Insights（免费版，采集真实用户的 Core Web Vitals；defer 异步加载，不阻塞渲染） -->
-    <script>
-        /* 液态玻璃浮层的交互开关。
-           浮层必须盖在正文之上才能折射正文，但那样会把所有点击都吃掉；
-           所以默认 pointer-events:none（点击穿透到页面），只有指针真的落在某块玻璃上、
-           或该玻璃正被抓取拖拽时，才把事件接管过来。
-           玻璃位置取自组件的 lg.orbs（每帧刷新，含 grabbed / x / y / r）。
-           拿不到接口时（例如 file:// 打开导致跨源）退化为纯装饰层，页面不受任何影响。 */
-        (function() {
-            var frame = document.getElementById('lgLayer');
-            if (!frame) return;
-
-            if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-                frame.parentNode.removeChild(frame);
-                return;
-            }
-
-            var orbs = [];
-            var px = -1e5, py = -1e5;
-            var interactive = false;
-            var lg = null;
-
-            function setInteractive(on) {
-                if (on === interactive) return;
-                interactive = on;
-                frame.style.pointerEvents = on ? 'auto' : 'none';
-                frame.style.cursor = on ? 'grab' : '';
-            }
-
-            function nearOrb(x, y) {
-                for (var i = 0; i < orbs.length; i++) {
-                    var o = orbs[i];
-                    var r = (o.r || (o.size || 0) / 2) + 8;   /* 8px 手感余量 */
-                    var dx = x - o.x, dy = y - o.y;
-                    if (dx * dx + dy * dy <= r * r) return true;
-                }
-                return false;
-            }
-
-            function track(e) { px = e.clientX; py = e.clientY; }
-
-            function evaluate() {
-                var busy = false;
-                for (var i = 0; i < orbs.length; i++) {
-                    if (orbs[i].grabbed) { busy = true; break; }
-                }
-                setInteractive(busy || nearOrb(px, py));
-            }
-
-            window.addEventListener('mousemove', track, { passive: true });
-
-            document.addEventListener('mouseleave', function() { px = -1e5; py = -1e5; });
-
-            frame.addEventListener('load', function() {
-                try {
-                    lg = frame.contentWindow.liquidGlass;
-                    if (!lg) return;
-                    var doc = frame.contentDocument;
-                    /* 浮层接管事件后，父窗口的 mousemove 就不再触发了，
-                       所以同时监听 iframe 内部的移动，否则指针移出玻璃后无法收回交互。 */
-                    if (doc) doc.addEventListener('mousemove', track, true);
-                    lg.onDraw(function() {
-                        orbs = lg.orbs || [];
-                        evaluate();
-                    });
-                } catch (e) {
-                    lg = null;
-                }
-            });
-        })();
-    </script>
 
     <script>
         window.si = window.si || function () { (window.siq = window.siq || []).push(arguments); };
