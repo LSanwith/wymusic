@@ -216,7 +216,7 @@ $ sudo docker run -d -p 3000:3000 netease-music-api
 - 大部分请求参数或返回内容可在 `/api_decrypt.html` 里解析
 - 请求参数模式下, 解密结果可直接带到 `/api.html` 继续调试
 - 需要返回值加密时, 可传 `e_r=1`, `weapi` 和 `eapi` 都支持
-- 目前支持算法 有 `weapi`, `eapi`, `linuxapi` 和 `xeapi` (xeapi 是一种不加密的特殊算法, 主要用于调试加密前的原始请求参数)
+- 目前支持算法 有 `weapi`, `eapi`, `linuxapi`, `xeapi` 和 `neapi` (xeapi 是一种不加密的特殊算法, 主要用于调试加密前的原始请求参数; neapi 走独立的压缩加密通道, 配置由 `/register/neapikey` 自动获取与刷新)
 
 
 ## 接口文档
@@ -1307,7 +1307,7 @@ tags: 歌单标签
 `lossless`=>`无损`, `hires`=>`Hi-Res`, `jyeffect` => `高清臻音`, `dolby` => `杜比全景声`, `vivid` => `臻音全景声`, `jymaster` => `超清母带`, `sky` => `沉浸环绕声`
 `unblock`: 是否使用使用歌曲解锁, 分为`true`和`false`
 
-**可选参数 :** `immerseType`: 沉浸声环绕声类型, 分为`c512` => `新版c51类型`, `ste2` => `新版环绕立体声类型`, `aac2` => `新版aac类型`,  `c51` => `c51类型`, `ste` => `环绕立体声类型`, `aac` => `aac类型`, 仅在 `level=sky` 时生效, 默认为 `c51`
+**可选参数 :** `immerseType`: 沉浸声环绕声类型, 分为`c512` => `新版c51类型`, `ste2` => `新版环绕立体声类型`, `aac2` => `新版aac类型`, `c51` => `c51类型`, `ste` => `环绕立体声类型`, `aac` => `aac类型`, 仅在 `level=sky` 时生效, 默认为 `c51`
 
 **接口地址 :** `/song/url/v1`
 
@@ -2390,6 +2390,16 @@ privilege:权限相关信息
 **接口地址 :** `/recommend/songs`
 
 **调用例子 :** `/recommend/songs`
+
+### 获取每日推荐歌曲 - v1
+
+说明 : 调用此接口 , 可获得每日推荐歌曲 ( 需要登录 )
+
+**可选参数 :** `ispush`: 是否刷新日推 , 默认为 false
+
+**接口地址 :** `/recommend/songs/v1`
+
+**调用例子 :** `/recommend/songs/v1`
 
 ### 每日推荐歌曲-不感兴趣
 
@@ -5877,6 +5887,82 @@ let data = encodeURIComponent(
 **接口地址 :** `/song/simi/get`
 
 **调用例子 :** `/song/simi/get?id=39227633`
+
+### 获取用户乐迷团列表
+
+说明 : 登录后调用此接口 , 可获取当前登录用户已加入的全部歌手乐迷团列表
+
+**接口地址 :** `/fans/group/user/groups`
+
+**调用例子 :** `/fans/group/user/groups`
+
+### 获取乐迷团详情
+
+说明 : 调用此接口 , 可获取乐迷团详情
+
+**必选参数 :** `groupId` : 乐迷团 ID
+
+**可选参数 :** `scene` : 场景标识
+
+**接口地址 :** `/fans/group/detail`
+
+**调用例子 :** `/fans/group/detail?groupId=1872529203038486609`
+
+### 获取用户在乐迷团的详情
+
+说明 : 登录后调用此接口 , 可获取当前用户在指定乐迷团的详细成员信息及铭牌等级
+
+**必选参数 :** `groupId` : 乐迷团 ID
+
+**接口地址 :** `/fans/group/user/group/detail`
+
+**调用例子 :** `/fans/group/user/group/detail?groupId=1755777360858267711`
+
+### 获取乐迷团推荐笔记
+
+说明 : 调用此接口 , 可获取指定乐迷团的推荐笔记
+
+**必选参数 :** `fansGroupId` : 乐迷团 ID
+
+**可选参数 :** `cursor` : 游标 , 默认为 0
+
+`size` : 返回数量 , 默认为 10
+
+**接口地址 :** `/fans/group/feed/recommend`
+
+**调用例子 :** `/fans/group/feed/recommend?fansGroupId=1872529203038486609&size=10&cursor=0`
+
+## 每日指定风格歌曲推荐
+
+说明 : 调用此接口 , 可获取每日指定风格歌曲推荐
+
+**接口地址 :** `/recommend/category/songs`
+
+**调用例子 :** `/recommend/category/songs`
+
+## 获取每日指定风格歌曲推荐的风格列表
+
+说明 : 调用此接口 , 可获取每日指定风格歌曲推荐的风格列表
+
+**接口地址 :** `/recommend/category/configs`
+
+**调用例子 :** `/recommend/category/configs`
+
+## 设置每日指定风格歌曲推荐的风格
+
+说明 : 调用此接口 , 可设置每日指定风格歌曲推荐的风格
+
+**必选参数 :**
+
+`tags`: 风格标签, 可通过 `/recommend/category/configs` 获取
+
+`category`: 风格标签的父ID, 可通过 `/recommend/category/configs` 获取
+
+!> 只能设置当前CategoryId下的tags, 不能设置其他CategoryId下的tags, 否则会报错
+
+**接口地址 :** `/recommend/category/config`
+
+**调用例子 :** `/recommend/category/config?tags=10004,10015&categoryId=1000`
 
 ## 离线访问此文档
 
