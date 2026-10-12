@@ -296,6 +296,7 @@
                 writeStore(ALWAYS_STORE, this.value.trim());
                 this.value = getAlways();
                 syncAlwaysHint();
+                checkAlways();
             });
             $('gateKey').addEventListener('change', function () {
                 writeStore(KEY_STORE, this.value.trim());
@@ -313,6 +314,38 @@
                 $('uploadHint').textContent = alwaysHint();
             }
             syncAlwaysHint();
+
+            /* ---------- 永久保存口令预检（实时显示已用次数） ---------- */
+            /* 记住最近一次预检结果，上传前据此拦截，避免撞到 SDK 那句
+               没有信息量的英文报错 "Failed to retrieve the client token" */
+            var alwaysState = { tier: 'none', limit: 5, used: null, left: null };
+
+            function quotaLine(state) {
+                if (state.tier === 'vip') return '私有口令：永久保存，不限次数。';
+                if (state.tier === 'invalid') return '永久保存口令不正确，上传会失败；请检查后重填。';
+                var limit = state.limit || 5;
+                var used = (state.used === null || state.used === undefined) ? '—' : state.used;
+                var line = '公开口令每月共 ' + limit + ' 次（KEY=FileAlways，现已使用（' + used + '）次）';
+                if (state.used !== null && state.used !== undefined && state.used >= limit) {
+                    line += ' —— 本月已用完，下月恢复';
+                }
+                return line;
+            }
+
+            async function checkAlways() {
+                var key = getAlways();
+                try {
+                    var r = await api('/file/always' + (key ? '?always=' + encodeURIComponent(key) : ''));
+                    alwaysState = r.data || alwaysState;
+                } catch (e) {
+                    alwaysState = { tier: key ? 'unknown' : 'none', limit: 5, used: null, left: null };
+                }
+                quotaInfo.textContent = quotaLine(alwaysState);
+                if (alwaysState.tier === 'invalid') quotaInfo.className = 'hint err';
+                else quotaInfo.className = 'hint';
+                return alwaysState;
+            }
+            checkAlways();
 
             /* ---------- 通用 ---------- */
             function showNotice(html) {
@@ -445,6 +478,23 @@
                     return;
                 }
 
+                /* 上传前先确认永久保存口令状态：额度用完 / 口令不对时
+                   直接给中文提示，不要等 SDK 抛那句没信息量的英文错误 */
+                var st = await checkAlways();
+                if (st.tier === 'invalid') {
+                    btn.disabled = false;
+                    showNotice('<b>永久保存口令不正确</b>请检查「永久保存口令」栏，' +
+                        '或清空它按 7 天有效上传。');
+                    return;
+                }
+                if (st.tier === 'pub' && st.used !== null && st.used !== undefined && st.used >= (st.limit || 5)) {
+                    btn.disabled = false;
+                    showNotice('<b>公开口令本月 ' + (st.limit || 5) + ' 次额度已用完</b>' +
+                        '下个月自动恢复。现在可以清空「永久保存口令」栏，' +
+                        '按 7 天有效继续上传（不占用额度）。');
+                    return;
+                }
+
                 for (var i = 0; i < files.length; i++) {
                     var file = files[i];
                     var row = addRow(uploadList, file.name);
@@ -525,12 +575,15 @@
                     if (!r.ok) throw new Error((r.data && r.data.msg) || ('HTTP ' + r.status));
 
                     var q = r.data.quota || {};
-                    var qLimit = q.limit || 5;
-                    var qUsed = (q.used === null || q.used === undefined) ? '—' : q.used;
-                    quotaInfo.textContent = '公开口令每月共 ' + qLimit + ' 次（KEY=FileAlways，现已使用（' +
-                        qUsed + '）次）';
-                    if (q.left === 0) {
-                        quotaInfo.textContent += ' —— 本月已用完，下月恢复';
+                    /* 用预检结果统一渲染额度行（已用次数以 keep-pub 下本月文件数为准） */
+                    alwaysState = {
+                        tier: getAlways() ? alwaysState.tier : 'none',
+                        limit: q.limit || alwaysState.limit || 5,
+                        used: (q.used === null || q.used === undefined) ? null : q.used,
+                        left: (q.left === null || q.left === undefined) ? null : q.left,
+                    };
+                    if (alwaysState.tier !== 'vip' && alwaysState.tier !== 'invalid') {
+                        quotaInfo.textContent = quotaLine(alwaysState);
                     }
 
                     var blobs = r.data.blobs || [];
