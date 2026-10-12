@@ -1,0 +1,61 @@
+/* 站内导航（音乐界面 / 文件挂载代理）—— 两个页面共用，保持外观一致 */
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: rgba(10, 10, 12, 0.55);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.nav-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.nav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 14px;
+  line-height: 1.2;
+  color: rgba(255, 255, 255, 0.72);
+  text-decoration: none;
+  transition:
+    background 0.25s,
+    color 0.25s,
+    border-color 0.25s;
+}
+.nav a:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+.nav a.active {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+.nav-brand {
+  margin-left: auto;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.45);
+}
+@media (max-width: 480px) {
+  .nav {
+    padding: 8px 12px;
+  }
+  .nav a {
+    padding: 6px 12px;
+    font-size: 13px;
+  }
+  .nav-brand {
+    display: none;
+  }
+}

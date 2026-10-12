@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <link rel="icon" href="/docs/netease.png">
+    <title>文件挂载代理 · Sanwith</title>
+    <link rel="stylesheet" href="/nav.css">
+    <style>
+        :root {
+            --fg: #ffffff;
+            --muted: rgba(255, 255, 255, 0.7);
+            --card-bg: rgba(255, 255, 255, 0.09);
+            --card-border: rgba(255, 255, 255, 0.15);
+            --btn-bg: rgba(255, 255, 255, 0.12);
+            --ok: #7ee2a8;
+            --err: #ff9c9c;
+        }
+        * { box-sizing: border-box; }
+        html { scrollbar-width: none; -ms-overflow-style: none; }
+        html::-webkit-scrollbar { display: none; }
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: var(--fg);
+            background: #0a0a0c;
+            line-height: 1.6;
+            position: relative;
+            overflow-x: hidden;
+        }
+        /* 背景图沿用首页那张，代码里两处保持一致 */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            pointer-events: none;
+            background-image: url('/bg.jpg');
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+        }
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.6);
+        }
+        .container {
+            max-width: 960px;
+            margin: 32px auto 60px;
+            padding: 0 20px;
+            position: relative;
+            z-index: 1;
+        }
+        header.site-header { margin-bottom: 22px; user-select: none; }
+        header.site-header h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin: 0;
+            text-shadow: 0 0 30px rgba(255, 255, 255, 0.2);
+        }
+        header.site-header .sub { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+
+        .block {
+            position: relative;
+            background: var(--card-bg);
+            backdrop-filter: blur(2px);
+            -webkit-backdrop-filter: blur(2px);
+            border: 1px solid var(--card-border);
+            border-radius: 14px;
+            padding: 22px 24px;
+            margin-bottom: 18px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+            transition: box-shadow 0.3s, border-color 0.3s;
+        }
+        .block:hover {
+            border-color: rgba(255, 255, 255, 0.25);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+        }
+        .block h2 {
+            margin: 0 0 14px;
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+        .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+        input[type="text"], input[type="url"], input[type="password"], input[type="file"] {
+            flex: 1 1 260px;
+            min-width: 0;
+            padding: 10px 12px;
+            font-size: 14px;
+            color: var(--fg);
+            background: rgba(0, 0, 0, 0.28);
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            outline: none;
+        }
+        input[type="file"] { padding: 8px 10px; }
+        input:focus { border-color: rgba(255, 255, 255, 0.45); }
+        input::placeholder { color: rgba(255, 255, 255, 0.35); }
+        button {
+            padding: 10px 18px;
+            font-size: 14px;
+            color: var(--fg);
+            background: var(--btn-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+        }
+        button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.2); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .hint { margin-top: 10px; font-size: 13px; color: var(--muted); }
+        .hint.err { color: var(--err); }
+        .hint.ok { color: var(--ok); }
+
+        .notice {
+            border-radius: 14px;
+            padding: 16px 20px;
+            margin-bottom: 18px;
+            font-size: 14px;
+            background: rgba(255, 156, 156, 0.12);
+            border: 1px solid rgba(255, 156, 156, 0.35);
+        }
+        .notice b { display: block; margin-bottom: 6px; }
+
+        .list { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+        .item {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            padding: 10px 12px;
+            background: rgba(0, 0, 0, 0.22);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            font-size: 13px;
+        }
+        .item .name {
+            flex: 1 1 220px;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .item .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+        .item .bar {
+            flex: 1 1 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 999px;
+            overflow: hidden;
+        }
+        .item .bar > i {
+            display: block;
+            height: 100%;
+            width: 0;
+            background: #fff;
+            border-radius: 999px;
+            transition: width 0.2s;
+        }
+        .item a { color: #9fd0ff; text-decoration: none; }
+        .item a:hover { text-decoration: underline; }
+        .item button { padding: 5px 12px; font-size: 12px; border-radius: 8px; }
+        code.selectable { user-select: text; }
+        .gate { margin-top: 12px; }
+        .gate label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+        @media (max-width: 480px) {
+            .container { margin: 18px auto 40px; padding: 0 16px; }
+            .block { padding: 16px; }
+            header.site-header h1 { font-size: 22px; }
+        }
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-list">
+            <a href="/">音乐界面</a>
+            <a href="/file/" class="active">文件挂载代理</a>
+        </div>
+        <span class="nav-brand">Sanwith</span>
+    </nav>
+
+    <main class="container">
+        <header class="site-header">
+            <h1>文件挂载代理</h1>
+            <p class="sub">上传文件 · 通过 URL 下载</p>
+        </header>
+
+        <div id="notice" class="notice" hidden></div>
+
+        <section class="block">
+            <h2>上传文件</h2>
+            <div class="row">
+                <input type="file" id="fileInput" multiple>
+                <button id="uploadBtn">上传</button>
+            </div>
+            <div class="hint">文件直接从浏览器传到 Vercel Blob，不经过接口转发，因此不受 4.5MB 限制。</div>
+            <div class="list" id="uploadList"></div>
+        </section>
+
+        <section class="block">
+            <h2>通过 URL 下载</h2>
+            <div class="row">
+                <input type="url" id="dlUrl" placeholder="https://example.com/file.zip">
+                <button id="dlBtn">下载</button>
+            </div>
+            <div class="hint" id="dlInfo">小于 4MB 的文件由本站代理转发（可绕开防盗链）；更大的文件会自动改为直连源站下载。</div>
+        </section>
+
+        <section class="block">
+            <h2>已上传文件</h2>
+            <div class="row">
+                <button id="refreshBtn">刷新列表</button>
+            </div>
+            <div class="list" id="blobList"></div>
+            <div class="hint" id="listInfo"></div>
+        </section>
+
+        <section class="block">
+            <h2>上传口令</h2>
+            <div class="hint">服务端若设置了环境变量 <code class="selectable">FILE_UPLOAD_KEY</code>，此处需填同样的口令才能上传、查看和删除。未设置则留空即可。</div>
+            <div class="gate">
+                <label for="gateKey">口令（只保存在本机浏览器）</label>
+                <div class="row">
+                    <input type="password" id="gateKey" placeholder="未设置可留空" autocomplete="off">
+                    <button id="saveKeyBtn">保存</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        (function () {
+            'use strict';
+
+            var SDK_VERSION = '2.8.1';
+            var CDNS = [
+                'https://esm.sh/@vercel/blob@' + SDK_VERSION + '/client',
+                'https://cdn.jsdelivr.net/npm/@vercel/blob@' + SDK_VERSION + '/client/+esm',
+                'https://esm.sh/@vercel/blob@' + SDK_VERSION,
+            ];
+            var KEY_STORE = 'bmusic.fileProxy.key';
+
+            var $ = function (id) { return document.getElementById(id); };
+            var notice = $('notice');
+            var uploadList = $('uploadList');
+            var blobList = $('blobList');
+            var listInfo = $('listInfo');
+            var dlInfo = $('dlInfo');
+
+            /* ---------- 口令 ---------- */
+            function getKey() {
+                try { return localStorage.getItem(KEY_STORE) || ''; } catch (e) { return ''; }
+            }
+            $('gateKey').value = getKey();
+            $('saveKeyBtn').addEventListener('click', function () {
+                try { localStorage.setItem(KEY_STORE, $('gateKey').value.trim()); } catch (e) { /* 隐私模式下忽略 */ }
+                listInfo.textContent = '已保存到本机浏览器';
+                listInfo.className = 'hint ok';
+                loadBlobs();
+            });
+
+            /* ---------- 通用 ---------- */
+            function showNotice(html) {
+                notice.innerHTML = html;
+                notice.hidden = false;
+            }
+            function fmtSize(n) {
+                if (n === null || n === undefined || isNaN(n)) return '大小未知';
+                var u = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0;
+                while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+                return (i === 0 ? n : n.toFixed(1)) + ' ' + u[i];
+            }
+            function fmtTime(t) {
+                try { return new Date(t).toLocaleString(); } catch (e) { return ''; }
+            }
+
+            /** 请求本站 JSON 接口；始终返回 {ok, status, data} */
+            function api(path, opts) {
+                return fetch(path, opts).then(function (r) {
+                    return r.json().catch(function () { return {}; }).then(function (j) {
+                        return { ok: r.ok, status: r.status, data: j };
+                    });
+                });
+            }
+
+            /** 把二进制存成文件；浏览器下载时用这个名字 */
+            function saveBlob(blob, name) {
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = name || 'download';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+            }
+
+            /* ---------- 上传组件（按需从 CDN 加载） ---------- */
+            var sdkPromise = null;
+            function loadSDK() {
+                if (sdkPromise) return sdkPromise;
+                sdkPromise = (async function () {
+                    var lastErr = null;
+                    for (var i = 0; i < CDNS.length; i++) {
+                        try { return await import(CDNS[i]); } catch (e) { lastErr = e; }
+                    }
+                    throw new Error('无法加载上传组件（CDN 均不可达）' + (lastErr ? '：' + lastErr.message : ''));
+                })();
+                return sdkPromise;
+            }
+
+            /** 在列表里插一行，返回该行元素，供更新进度用 */
+            function addRow(container, name) {
+                var el = document.createElement('div');
+                el.className = 'item';
+                el.innerHTML = '<span class="name"></span><span class="meta">等待中</span>' +
+                    '<div class="bar"><i></i></div>';
+                el.querySelector('.name').textContent = name;
+                container.appendChild(el);
+                return {
+                    el: el,
+                    meta: function (t) { el.querySelector('.meta').textContent = t; },
+                    progress: function (p) { el.querySelector('.bar > i').style.width = p + '%'; },
+                    done: function (url) {
+                        el.querySelector('.bar').remove();
+                        var m = el.querySelector('.meta');
+                        m.innerHTML = '';
+                        var a = document.createElement('a');
+                        a.href = url; a.target = '_blank'; a.rel = 'noopener';
+                        a.textContent = '打开';
+                        var copy = document.createElement('button');
+                        copy.textContent = '复制链接';
+                        copy.addEventListener('click', function () {
+                            navigator.clipboard.writeText(url).then(function () {
+                                copy.textContent = '已复制';
+                                setTimeout(function () { copy.textContent = '复制链接'; }, 1500);
+                            });
+                        });
+                        m.appendChild(a);
+                        m.appendChild(document.createTextNode(' '));
+                        m.appendChild(copy);
+                    },
+                    fail: function (msg) {
+                        el.querySelector('.bar').remove();
+                        var m = el.querySelector('.meta');
+                        m.textContent = msg;
+                        m.style.color = 'var(--err)';
+                    },
+                };
+            }
+
+            $('uploadBtn').addEventListener('click', async function () {
+                var files = $('fileInput').files;
+                if (!files || !files.length) {
+                    showNotice('<b>还没有选择文件</b>先点“选择文件”，再点“上传”。');
+                    return;
+                }
+                var btn = this;
+                btn.disabled = true;
+                notice.hidden = true;
+
+                var sdk;
+                try {
+                    sdk = await loadSDK();
+                } catch (e) {
+                    btn.disabled = false;
+                    showNotice('<b>上传组件加载失败</b>' + e.message);
+                    return;
+                }
+
+                for (var i = 0; i < files.length; i++) {
+                    var file = files[i];
+                    var row = addRow(uploadList, file.name);
+                    row.meta(fmtSize(file.size));
+                    try {
+                        var blob = await sdk.upload(file.name, file, {
+                            access: 'public',
+                            handleUploadUrl: '/file/upload',
+                            clientPayload: getKey() || undefined,
+                            onUploadProgress: function (p) { row.progress(p.percentage); },
+                        });
+                        row.done(blob.url);
+                    } catch (e) {
+                        row.fail(e && e.message ? e.message : '上传失败');
+                    }
+                }
+                btn.disabled = false;
+                $('fileInput').value = '';
+                loadBlobs();
+            });
+
+            /* ---------- 通过 URL 下载 ---------- */
+            $('dlBtn').addEventListener('click', async function () {
+                var raw = $('dlUrl').value.trim();
+                if (!raw) { dlInfo.textContent = '请先填写文件地址'; dlInfo.className = 'hint err'; return; }
+                var btn = this;
+                btn.disabled = true;
+                dlInfo.className = 'hint';
+                dlInfo.textContent = '正在探测文件…';
+                try {
+                    var probe = await api('/file/dl?probe=1&url=' + encodeURIComponent(raw));
+                    if (!probe.ok) throw new Error((probe.data && probe.data.msg) || ('探测失败（HTTP ' + probe.status + '）'));
+                    var meta = probe.data;
+
+                    if (meta.proxy) {
+                        dlInfo.textContent = '正在经由本站转发…（' + fmtSize(meta.size) + '）';
+                        var r = await fetch('/file/dl?url=' + encodeURIComponent(raw));
+                        if (!r.ok) throw new Error('转发失败（HTTP ' + r.status + '）');
+                        saveBlob(await r.blob(), meta.name);
+                        dlInfo.textContent = '已开始下载：' + meta.name + '（' + fmtSize(meta.size) + '）';
+                        dlInfo.className = 'hint ok';
+                    } else {
+                        dlInfo.textContent = '文件 ' + fmtSize(meta.size) + ' 超过 4MB，改为直连源站下载…';
+                        window.location.href = '/file/dl?url=' + encodeURIComponent(raw);
+                    }
+                } catch (e) {
+                    dlInfo.textContent = e.message || '下载失败';
+                    dlInfo.className = 'hint err';
+                }
+                btn.disabled = false;
+            });
+
+            /* ---------- 已上传文件 ---------- */
+            async function loadBlobs() {
+                blobList.innerHTML = '';
+                listInfo.className = 'hint';
+                listInfo.textContent = '加载中…';
+                try {
+                    var r = await api('/file/list' + (getKey() ? '?key=' + encodeURIComponent(getKey()) : ''));
+                    if (r.status === 501) {
+                        blobList.innerHTML = '';
+                        listInfo.textContent = '';
+                        showNotice('<b>还没配置 Vercel Blob，上传功能暂不可用</b>' +
+                            '到 Vercel 项目的 <b>Storage</b> 里创建一个 Blob store，' +
+                            '<code class="selectable">BLOB_READ_WRITE_TOKEN</code> 会自动注入到项目，然后重新部署即可。');
+                        return;
+                    }
+                    if (!r.ok) throw new Error((r.data && r.data.msg) || ('HTTP ' + r.status));
+                    var blobs = r.data.blobs || [];
+                    if (!blobs.length) {
+                        listInfo.textContent = '还没有上传过文件';
+                        return;
+                    }
+                    listInfo.textContent = '共 ' + blobs.length + ' 个文件';
+                    blobs.forEach(function (b) {
+                        var el = document.createElement('div');
+                        el.className = 'item';
+                        var name = document.createElement('span');
+                        name.className = 'name';
+                        name.textContent = b.pathname;
+                        var meta = document.createElement('span');
+                        meta.className = 'meta';
+                        meta.textContent = fmtSize(b.size) + ' · ' + fmtTime(b.uploadedAt);
+                        var dl = document.createElement('a');
+                        dl.href = b.url; dl.textContent = '下载';
+                        dl.setAttribute('download', '');
+                        var copy = document.createElement('button');
+                        copy.textContent = '复制链接';
+                        copy.addEventListener('click', function () {
+                            navigator.clipboard.writeText(b.url).then(function () {
+                                copy.textContent = '已复制';
+                                setTimeout(function () { copy.textContent = '复制链接'; }, 1500);
+                            });
+                        });
+                        var rm = document.createElement('button');
+                        rm.textContent = '删除';
+                        rm.addEventListener('click', async function () {
+                            if (!window.confirm('确定删除 ' + b.pathname + ' ？')) return;
+                            rm.disabled = true;
+                            var d = await api('/file/list?del=' + encodeURIComponent(b.url) +
+                                (getKey() ? '&key=' + encodeURIComponent(getKey()) : ''));
+                            if (d.ok) { el.remove(); } else {
+                                rm.disabled = false;
+                                rm.textContent = '删除失败';
+                            }
+                        });
+                        el.appendChild(name);
+                        el.appendChild(meta);
+                        el.appendChild(dl);
+                        el.appendChild(copy);
+                        el.appendChild(rm);
+                        blobList.appendChild(el);
+                    });
+                } catch (e) {
+                    listInfo.textContent = e.message || '列表加载失败';
+                    listInfo.className = 'hint err';
+                }
+            }
+            $('refreshBtn').addEventListener('click', loadBlobs);
+            loadBlobs();
+        })();
+    </script>
+</body>
+</html>
