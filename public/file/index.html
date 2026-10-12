@@ -215,9 +215,9 @@
                 <button id="uploadBtn">上传</button>
             </div>
             <div class="gate">
-                <label for="alwaysKey">永久保存口令（留空则文件 7 天后自动清理）</label>
+                <label for="alwaysKey">永久保存口令，留空则文件 7 天后自动清理</label>
                 <input type="password" id="alwaysKey" placeholder="留空 = 7 天有效，填对则永久保存" autocomplete="off">
-                <div class="hint" id="quotaInfo">公开口令每月共 5 次（KEY=FileAlways，现已使用（—）次）</div>
+                <div class="hint" id="quotaInfo">公开口令每月共 5 次，KEY=FileAlways，现已使用?次</div>
             </div>
             <div class="hint" id="uploadHint">文件直接从浏览器传到 Vercel Blob，不经过接口转发，因此不受 4.5MB 限制。</div>
             <div class="list" id="uploadList"></div>
@@ -229,7 +229,7 @@
                 <input type="url" id="dlUrl" placeholder="https://example.com/file.zip">
                 <button id="dlBtn">下载</button>
             </div>
-            <div class="hint" id="dlInfo">小于 4MB 的文件由本站代理转发（可绕开防盗链）；更大的文件会自动改为直连源站下载。</div>
+            <div class="hint" id="dlInfo">小于 4MB 的文件由本站代理转发，可绕开防盗链；更大的文件会自动改为直连源站下载。</div>
         </section>
 
         <!-- 只有服务端真的设了 FILE_UPLOAD_KEY（列表返回 403）才显示，
@@ -241,7 +241,7 @@
             </div>
 
             <div class="gate">
-                <label for="gateKey">访问口令（只保存在本机浏览器）</label>
+                <label for="gateKey">访问口令，只保存在本机浏览器</label>
                 <input type="password" id="gateKey" placeholder="请输入访问口令" autocomplete="off">
             </div>
         </section>
@@ -324,8 +324,8 @@
                 if (state.tier === 'vip') return '私有口令：永久保存，不限次数。';
                 if (state.tier === 'invalid') return '永久保存口令不正确，上传会失败；请检查后重填。';
                 var limit = state.limit || 5;
-                var used = (state.used === null || state.used === undefined) ? '—' : state.used;
-                var line = '公开口令每月共 ' + limit + ' 次（KEY=FileAlways，现已使用（' + used + '）次）';
+                var used = (state.used === null || state.used === undefined) ? '?' : state.used;
+                var line = '公开口令每月共 ' + limit + ' 次，KEY=FileAlways，现已使用' + used + '次';
                 if (state.used !== null && state.used !== undefined && state.used >= limit) {
                     line += ' —— 本月已用完，下月恢复';
                 }
@@ -392,7 +392,7 @@
                     for (var i = 0; i < CDNS.length; i++) {
                         try { return await import(CDNS[i]); } catch (e) { lastErr = e; }
                     }
-                    throw new Error('无法加载上传组件（CDN 均不可达）' + (lastErr ? '：' + lastErr.message : ''));
+                    throw new Error('无法加载上传组件：CDN 均不可达' + (lastErr ? '，' + lastErr.message : ''));
                 })();
                 return sdkPromise;
             }
@@ -491,7 +491,7 @@
                     btn.disabled = false;
                     showNotice('<b>公开口令本月 ' + (st.limit || 5) + ' 次额度已用完</b>' +
                         '下个月自动恢复。现在可以清空「永久保存口令」栏，' +
-                        '按 7 天有效继续上传（不占用额度）。');
+                        '按 7 天有效继续上传，不占用额度。');
                     return;
                 }
 
@@ -526,15 +526,15 @@
                 dlInfo.textContent = '正在探测文件…';
                 try {
                     var probe = await api('/file/dl?probe=1&url=' + encodeURIComponent(raw));
-                    if (!probe.ok) throw new Error((probe.data && probe.data.msg) || ('探测失败（HTTP ' + probe.status + '）'));
+                    if (!probe.ok) throw new Error((probe.data && probe.data.msg) || ('探测失败 HTTP ' + probe.status));
                     var meta = probe.data;
 
                     if (meta.proxy) {
-                        dlInfo.textContent = '正在经由本站转发…（' + fmtSize(meta.size) + '）';
+                        dlInfo.textContent = '正在经由本站转发… ' + fmtSize(meta.size);
                         var r = await fetch('/file/dl?url=' + encodeURIComponent(raw));
-                        if (!r.ok) throw new Error('转发失败（HTTP ' + r.status + '）');
+                        if (!r.ok) throw new Error('转发失败 HTTP ' + r.status);
                         saveBlob(await r.blob(), meta.name);
-                        dlInfo.textContent = '已开始下载：' + meta.name + '（' + fmtSize(meta.size) + '）';
+                        dlInfo.textContent = '已开始下载：' + meta.name + ' · ' + fmtSize(meta.size);
                         dlInfo.className = 'hint ok';
                     } else {
                         dlInfo.textContent = '文件 ' + fmtSize(meta.size) + ' 超过 4MB，改为直连源站下载…';
@@ -592,7 +592,7 @@
                         return;
                     }
                     listInfo.textContent = '共 ' + blobs.length + ' 个文件' +
-                        (r.data.cleaned ? '（本次清理了 ' + r.data.cleaned + ' 个过期文件）' : '');
+                        (r.data.cleaned ? '，本次清理了 ' + r.data.cleaned + ' 个过期文件' : '');
                     blobs.forEach(function (b) {
                         var el = document.createElement('div');
                         el.className = 'item';
