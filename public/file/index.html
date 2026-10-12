@@ -499,12 +499,17 @@
                     return;
                 }
 
+                /* 保存期前缀必须由这里带上：@vercel/blob/client 的 PUT 用的就是
+                   传进去的 pathname，服务端只校验不改写，两边必须一致 */
+                var folder = st.tier === 'vip' ? 'keep-vip'
+                    : st.tier === 'pub' ? 'keep-pub' : 'tmp';
+
                 for (var i = 0; i < files.length; i++) {
                     var file = files[i];
                     var row = addRow(uploadList, file.name);
-                    row.meta(fmtSize(file.size) + (getAlways() ? ' · 永久保存' : ' · 7 天有效'));
+                    row.meta(fmtSize(file.size) + (folder === 'tmp' ? ' · 7 天有效' : ' · 永久保存'));
                     try {
-                        var blob = await sdk.upload(file.name, file, {
+                        var blob = await sdk.upload(folder + '/' + file.name, file, {
                             access: 'public',
                             handleUploadUrl: '/file/upload',
                             clientPayload: JSON.stringify({ gate: getKey(), always: getAlways() }),
