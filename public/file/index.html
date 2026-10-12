@@ -339,7 +339,8 @@
             async function checkAlways() {
                 var key = getAlways();
                 try {
-                    var r = await api('/file/always' + (key ? '?always=' + encodeURIComponent(key) : ''));
+                    var r = await api('/file/always?_=' + Date.now() +
+                        (key ? '&always=' + encodeURIComponent(key) : ''));
                     alwaysState = r.data || alwaysState;
                 } catch (e) {
                     alwaysState = { tier: key ? 'unknown' : 'none', limit: 5, used: null, left: null };
@@ -435,7 +436,8 @@
                         }
 
                         m.appendChild(btn('下载', function () {
-                            window.location.href = dl;
+                            /* 走自己的短链接：点了照样下载，但链接本身是本站域名 */
+                            window.location.href = share;
                         }));
                         m.appendChild(btn('打开', function () {
                             window.open(url, '_blank', 'noopener');
@@ -564,7 +566,8 @@
                 listInfo.className = 'hint';
                 listInfo.textContent = '加载中…';
                 try {
-                    var r = await api('/file/list' + (getKey() ? '?key=' + encodeURIComponent(getKey()) : ''));
+                    var r = await api('/file/list?_=' + Date.now() +
+                        (getKey() ? '&key=' + encodeURIComponent(getKey()) : ''));
                     if (r.status === 501) {
                         blobList.innerHTML = '';
                         listInfo.textContent = '';
@@ -617,8 +620,9 @@
                             (b.retentionLabel ? ' · ' + b.retentionLabel : '');
                         if (b.retention === 'temp') meta.style.color = 'var(--err)';
                         var dl = document.createElement('a');
-                        /* 用 downloadUrl 触发下载；url 在图片/音频上会变成内联预览 */
-                        dl.href = b.downloadUrl || b.url;
+                        /* 下载也走本站短链接，链接看起来是自己的域名 */
+                        dl.href = window.location.origin + (b.shareUrl || ('/file/get?n=' +
+                            encodeURIComponent(String(b.pathname || '').split('/').pop())));
                         dl.textContent = '下载';
                         var copy = document.createElement('button');
                         copy.textContent = '复制链接';
@@ -632,14 +636,43 @@
                         });
                         var rm = document.createElement('button');
                         rm.textContent = '删除';
+                        /* 不用 window.confirm：浏览器在多次弹窗后会静默拦截，
+                           confirm 直接返回 false，表现就是「点了删除没反应」。
+                           改成按钮内两步确认。 */
+                        var armed = false;
+                        var armTimer = null;
                         rm.addEventListener('click', async function () {
-                            if (!window.confirm('确定删除 ' + b.pathname + ' ？')) return;
+                            if (!armed) {
+                                armed = true;
+                                rm.textContent = '确认删除？';
+                                rm.style.color = 'var(--err)';
+                                armTimer = setTimeout(function () {
+                                    armed = false;
+                                    rm.textContent = '删除';
+                                    rm.style.color = '';
+                                }, 4000);
+                                return;
+                            }
+                            clearTimeout(armTimer);
                             rm.disabled = true;
+                            rm.textContent = '删除中…';
+                            /* 带上时间戳绕开服务端 2 分钟的接口缓存，
+                               否则删完再拉列表可能拿回删除前的旧数据 */
                             var d = await api('/file/list?del=' + encodeURIComponent(b.url) +
-                                (getKey() ? '&key=' + encodeURIComponent(getKey()) : ''));
-                            if (d.ok) { el.remove(); } else {
+                                (getKey() ? '&key=' + encodeURIComponent(getKey()) : '') +
+                                '&_=' + Date.now());
+                            if (d.ok) {
+                                el.remove();
+                                listInfo.textContent = '已删除 ' + (b.pathname || '');
+                                listInfo.className = 'hint ok';
+                                checkAlways();   // 删掉永久文件会把公开额度还回来
+                            } else {
                                 rm.disabled = false;
+                                rm.style.color = '';
                                 rm.textContent = '删除失败';
+                                listInfo.textContent = (d.data && d.data.msg) ||
+                                    ('删除失败 HTTP ' + d.status);
+                                listInfo.className = 'hint err';
                             }
                         });
                         el.appendChild(name);
