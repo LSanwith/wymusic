@@ -423,6 +423,9 @@
                         /* downloadUrl 让浏览器下载而不是内联预览
                            （图片/音频用 url 会被直接打开播放） */
                         var dl = blob.downloadUrl || blob.url;
+                        /* 分享用自己域名的短链接，不用 blob.vercel-storage.com 那一长串 */
+                        var share = window.location.origin + '/file/get?n=' +
+                            encodeURIComponent(String(blob.pathname || '').split('/').pop());
 
                         function btn(text, handler) {
                             var b = document.createElement('button');
@@ -438,7 +441,7 @@
                             window.open(url, '_blank', 'noopener');
                         }));
                         m.appendChild(btn('复制链接', function () {
-                            navigator.clipboard.writeText(url).then(function () {
+                            navigator.clipboard.writeText(share).then(function () {
                                 var t = m.querySelector('button:last-child');
                                 t.textContent = '已复制';
                                 setTimeout(function () { t.textContent = '复制链接'; }, 1500);
@@ -447,11 +450,10 @@
 
                         var link = document.createElement('a');
                         link.className = 'url';
-                        link.href = url;
-                        link.target = '_blank';
+                        link.href = share;
                         link.rel = 'noopener';
-                        link.textContent = url;
-                        link.title = url;
+                        link.textContent = share;
+                        link.title = share;
                         el.appendChild(link);
                     },
                     fail: function (msg) {
@@ -621,7 +623,9 @@
                         var copy = document.createElement('button');
                         copy.textContent = '复制链接';
                         copy.addEventListener('click', function () {
-                            navigator.clipboard.writeText(b.url).then(function () {
+                            var share = window.location.origin + (b.shareUrl || ('/file/get?n=' +
+                                encodeURIComponent(String(b.pathname || '').split('/').pop())));
+                            navigator.clipboard.writeText(share).then(function () {
                                 copy.textContent = '已复制';
                                 setTimeout(function () { copy.textContent = '复制链接'; }, 1500);
                             });
@@ -643,13 +647,15 @@
                         el.appendChild(dl);
                         el.appendChild(copy);
                         el.appendChild(rm);
+                        /* 显示的是本站短链接，而不是 blob.vercel-storage.com 那一长串 */
+                        var shareUrl = window.location.origin + (b.shareUrl || ('/file/get?n=' +
+                            encodeURIComponent(String(b.pathname || '').split('/').pop())));
                         var link = document.createElement('a');
                         link.className = 'url';
-                        link.href = b.url;
-                        link.target = '_blank';
+                        link.href = shareUrl;
                         link.rel = 'noopener';
-                        link.textContent = b.url;
-                        link.title = b.url;
+                        link.textContent = shareUrl;
+                        link.title = '实际存储地址：' + b.url;
                         el.appendChild(link);
                         blobList.appendChild(el);
                     });

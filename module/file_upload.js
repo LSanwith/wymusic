@@ -170,7 +170,11 @@ module.exports = async (query) => {
   try {
     const clientToken = await generateClientTokenFromReadWriteToken({
       pathname: parsed.pathname,
-      addRandomSuffix: true,
+      // 不加随机后缀：pathname 就等于原文件名，
+      // 这样下载下来还是「待机时钟.sb3」而不是「待机时钟-OIjDg8pi….sb3」
+      addRandomSuffix: false,
+      // 同名重复上传直接覆盖，否则会报「已存在」让人摸不着头脑
+      allowOverwrite: true,
       maximumSizeInBytes: MAX_SIZE,
     })
     return { status: 200, body: { type, clientToken } }
