@@ -363,6 +363,130 @@
                 try { return decodeURIComponent(u); } catch (e) { return u; }
             }
 
+            function fmtSpeed(bps) {
+                if (!isFinite(bps) || bps <= 0) return '';
+                return fmtSize(bps) + '/s';
+            }
+
+            function fmtEta(sec) {
+                if (!isFinite(sec) || sec < 0) return '';
+                if (sec < 1) return '不到 1 秒';
+                if (sec < 60) return Math.ceil(sec) + ' 秒';
+                var m = Math.floor(sec / 60);
+                return m + ' 分 ' + Math.round(sec - m * 60) + ' 秒';
+            }
+
+            /**
+             * 传输进度：把 loaded/total 换算成 百分比 · 速度 · 已传/总量 · 剩余时间。
+             * 速度取「距上次采样的增量 / 时间差」再做指数滑动平均，
+             * 否则瞬时读数会乱跳。状态挂在元素上，一个元素一份。
+             */
+            function paintProgress(el, loaded, total) {
+                var bar = el.querySelector('.bar');
+                if (!bar) {
+                    bar = document.createElement('div');
+                    bar.className = 'bar';
+                    bar.innerHTML = '<i></i>';
+                    el.appendChild(bar);
+                }
+                var st = el._tp || (el._tp = { t: 0, loaded: 0, speed: 0 });
+                var now = Date.now();
+                if (!st.t) {
+                    st.t = now;
+                    st.loaded = loaded;
+                } else {
+                    var dt = (now - st.t) / 1000;
+                    if (dt >= 0.3) {
+                        var inst = (loaded - st.loaded) / dt;
+                        st.speed = st.speed > 0 ? st.speed * 0.65 + inst * 0.35 : inst;
+                        st.t = now;
+                        st.loaded = loaded;
+                    }
+                }
+                var pct = total ? Math.min(100, (loaded / total) * 100) : 0;
+                bar.querySelector('i').style.width = pct.toFixed(1) + '%';
+
+                var parts = [total ? pct.toFixed(0) + '%' : fmtSize(loaded)];
+                if (st.speed > 0) parts.push(fmtSpeed(st.speed));
+                if (total) parts.push(fmtSize(loaded) + ' / ' + fmtSize(total));
+                if (total && st.speed > 0 && loaded < total) {
+                    parts.push('剩余 ' + fmtEta((total - loaded) / st.speed));
+                }
+                var meta = el.querySelector('.meta');
+                if (meta) meta.textContent = parts.join(' · ');
+            }
+
+            /** 把二进制存成文件；浏览器下载时用这个名字 */
+            function saveBlob(blob, name) {
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = name || 'download';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+            }
+
+            /* 超过这个体积就不整份读进内存，交回浏览器原生下载 */
+            var TRACK_MAX = 200 * 1024 * 1024;
+
+            /**
+             * 带进度地下载：先 fetch 出字节流（Blob 侧带
+             * access-control-allow-origin: *，所以跨域也读得到），
+             * 边读边更新进度，读完再用 object URL 存盘。
+             * 返回 false 表示这次不接管，调用方应退回普通跳转。
+             */
+            async function trackedDownload(el, name, size, share) {
+                if (size && size > TRACK_MAX) return false;
+                var res = await fetch(share);
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                if (!res.body || !res.body.getReader) return false;
+                /* 响应是 br 压缩过的，content-length 是压缩后的大小，
+                   所以总量优先用列表里的真实文件大小 */
+                var total = size || Number(res.headers.get('content-length')) || 0;
+                var reader = res.body.getReader();
+                var chunks = [];
+                var loaded = 0;
+                for (;;) {
+                    var r = await reader.read();
+                    if (r.done) break;
+                    chunks.push(r.value);
+                    loaded += r.value.length;
+                    paintProgress(el, loaded, total || loaded);
+                }
+                paintProgress(el, total || loaded, total || loaded);
+                saveBlob(
+                    new Blob(chunks, { type: res.headers.get('content-type') || '' }),
+                    name
+                );
+                return true;
+            }
+
+            /** 下载入口：能统计进度就统计，不能就退回浏览器原生下载 */
+            async function doDownload(el, name, size, share) {
+                var meta = el.querySelector('.meta');
+                var orig = meta ? meta.textContent : '';
+                function say(t) { if (meta) meta.textContent = t; }
+                var started = Date.now();
+                say('准备下载…');
+                try {
+                    var ok = await trackedDownload(el, name, size, share);
+                    var secs = (Date.now() - started) / 1000;
+                    if (!ok) {
+                        say('文件较大，交给浏览器下载…');
+                        window.location.href = share;
+                    } else {
+                        say('下载完成 · 用时 ' + fmtEta(secs) +
+                            (secs > 0 && size ? ' · 均速 ' + fmtSpeed(size / secs) : ''));
+                    }
+                } catch (e) {
+                    say('下载失败：' + (e && e.message ? e.message : e));
+                }
+                /* 几秒后恢复原来的「大小 · 时间 · 保存期」信息 */
+                setTimeout(function () { if (meta) meta.textContent = orig; }, 5000);
+            }
+
             /** 请求本站 JSON 接口；始终返回 {ok, status, data} */
             function api(path, opts) {
                 return fetch(path, opts).then(function (r) {
@@ -397,8 +521,8 @@
                 return {
                     el: el,
                     meta: function (t) { el.querySelector('.meta').textContent = t; },
-                    progress: function (p) { el.querySelector('.bar > i').style.width = p + '%'; },
-                    done: function (blob) {
+                    progress: function (loaded, total) { paintProgress(el, loaded, total); },
+                    done: function (blob, size) {
                         var bar = el.querySelector('.bar');
                         if (bar) bar.remove();
                         var m = el.querySelector('.meta');
@@ -421,7 +545,9 @@
 
                         m.appendChild(btn('下载', function () {
                             /* 走自己的短链接：点了照样下载，但链接本身是本站域名 */
-                            window.location.href = share;
+                            doDownload(el, String(blob.pathname || '').split('/').pop(),
+                                size, '/file/get?n=' +
+                                encodeURIComponent(String(blob.pathname || '').split('/').pop()));
                         }));
                         m.appendChild(btn('打开', function () {
                             window.open(url, '_blank', 'noopener');
@@ -501,9 +627,9 @@
                             access: 'public',
                             handleUploadUrl: '/file/upload',
                             clientPayload: JSON.stringify({ gate: getKey(), always: getAlways() }),
-                            onUploadProgress: function (p) { row.progress(p.percentage); },
+                            onUploadProgress: function (p) { row.progress(p.loaded, p.total); },
                         });
-                        row.done(blob);
+                        row.done(blob, file.size);
                     } catch (e) {
                         row.fail(e && e.message ? e.message : '上传失败');
                     }
@@ -572,11 +698,21 @@
                         meta.textContent = fmtSize(b.size) + ' · ' + fmtTime(b.uploadedAt) +
                             (b.retentionLabel ? ' · ' + b.retentionLabel : '');
                         if (b.retention === 'temp') meta.style.color = 'var(--err)';
+                        var baseName = String(b.pathname || '').split('/').pop();
                         var dl = document.createElement('a');
                         /* 下载也走本站短链接，链接看起来是自己的域名 */
-                        dl.href = window.location.origin + (b.shareUrl || ('/file/get?n=' +
-                            encodeURIComponent(String(b.pathname || '').split('/').pop())));
+                        dl.href = window.location.origin + (b.shareUrl ||
+                            ('/file/get?n=' + encodeURIComponent(baseName)));
                         dl.textContent = '下载';
+                        /* 左键点击时接管，好显示进度/速度；
+                           Ctrl/中键等仍然交给浏览器原生处理（另存为/新标签） */
+                        dl.addEventListener('click', function (ev) {
+                            if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey ||
+                                ev.button !== 0) return;
+                            ev.preventDefault();
+                            doDownload(el, baseName, b.size, '/file/get?n=' +
+                                encodeURIComponent(baseName));
+                        });
                         var copy = document.createElement('button');
                         copy.textContent = '复制链接';
                         copy.addEventListener('click', function () {
