@@ -94,9 +94,9 @@
         .block {
             position: relative;
             z-index: 1;
-            /* 玻璃由下层 iframe 里的组件渲染（真折射）；卡片自身透明，
-               这样折射的是页面背景、文字压在玻璃之上保持清晰 */
-            background: transparent;
+            background: var(--card-bg);
+            backdrop-filter: blur(2px);
+            -webkit-backdrop-filter: blur(2px);
             border: 1px solid var(--card-border);
             border-radius: 14px;
             padding: 22px 24px;
@@ -110,7 +110,7 @@
             --light-opacity: 0;
         }
         .block:hover {
-            background: rgba(255, 255, 255, 0.05);
+            background: rgba(255, 255, 255, 0.14);
             border-color: rgba(255,255,255,0.25);
             box-shadow: 0 4px 20px rgba(0,0,0,0.35), 0 0 15px rgba(255,255,255,0.05);
         }
@@ -341,22 +341,6 @@
             from { opacity: 0; transform: translateX(-50%) translateY(4px); }
             to { opacity: 1; transform: translateX(-50%) translateY(0); }
         }
-        /* 卡片内的液态玻璃层：与卡片等大、不参与布局、不接收指针事件；
-           卡片自带 overflow:hidden，所以半径直接沿用卡片的圆角 */
-        .block > .lg-panel {
-            position: absolute;
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            border: 0;
-            background: transparent;
-            border-radius: inherit;
-            pointer-events: none;
-            z-index: 0;
-        }
-        /* 卡片内容压在玻璃之上（h2 原本就是 z-index:2，这里补齐其余子元素） */
-        .block > *:not(.lg-panel) { position: relative; z-index: 1; }
-
     </style>
 </head>
 <body>
@@ -572,70 +556,7 @@ curl -s {origin}/search?keywords=网易云</code></pre>
         })();
     </script>
 
-    <!-- 液态玻璃卡片：每张 .block 内部挂一个与自身等大的组件 iframe —— 玻璃就是卡片本身，
-         不再用铺满全页的浮层。卡片原有的 hover 高亮 / 按下涟漪 / 鼠标跟随光效全部保留，
-         玻璃层 pointer-events:none，不抢任何事件。 -->
-    <script>
-        (function() {
-            /* 组件一律使用它自己的默认预设 —— 这里只做「几何 + 结构」三件事：
-               setBox/setRadius 把玻璃对齐卡片的尺寸与圆角、clear+add 只留一块、
-               URL 上的 hud/bg/count 是嵌入所必需。
-               不要在这里加 refractPower / bezel / thickness / chroma / highlight /
-               tint 之类的观感参数覆写；要调就调组件本体。 */
-            var SRC = 'liquid-glass.html?hud=0&bg=none&count=0';
-
-            function initPanel(card) {
-                var box = card.querySelector('.lg-panel');
-                if (!box) {
-                    box = document.createElement('iframe');
-                    box.className = 'lg-panel';
-                    box.setAttribute('aria-hidden', 'true');
-                    box.setAttribute('scrolling', 'no');
-                    box.setAttribute('tabindex', '-1');
-                    box.src = SRC;
-                    card.insertBefore(box, card.firstChild);
-                }
-
-                function apply() {
-                    try {
-                        var lg = box.contentWindow.liquidGlass;
-                        if (!lg) return;
-                        var w = Math.round(card.clientWidth);
-                        var h = Math.round(card.clientHeight);
-                        if (w < 8 || h < 8) return;
-                        var rad = parseFloat(getComputedStyle(card).borderTopLeftRadius) || 0;
-                        lg.clear();
-                        lg.setBox(w, h);
-                        if (lg.setRadius) lg.setRadius(rad);
-                        lg.add({ x: w / 2, y: h / 2 });
-                    } catch (e) { /* 跨源（例如 file:// 直接打开）时退化成普通卡片 */ }
-                }
-
-                if (box.dataset.lgReady) { apply(); return; }
-                box.addEventListener('load', function() {
-                    box.dataset.lgReady = '1';
-                    apply();
-                });
-                if (window.ResizeObserver) {
-                    var t = null;
-                    new ResizeObserver(function() {
-                        if (t) clearTimeout(t);
-                        t = setTimeout(apply, 160);
-                    }).observe(card);
-                }
-            }
-
-            function start() {
-                var cards = document.querySelectorAll('.block');
-                for (var i = 0; i < cards.length; i++) initPanel(cards[i]);
-            }
-            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
-            else start();
-        })();
-    </script>
-
     <!-- Vercel Speed Insights（免费版，采集真实用户的 Core Web Vitals；defer 异步加载，不阻塞渲染） -->
-
     <script>
         window.si = window.si || function () { (window.siq = window.siq || []).push(arguments); };
     </script>
