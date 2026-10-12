@@ -46,6 +46,8 @@ module.exports = async (query) => {
         cursor: result.cursor || null,
         blobs: (result.blobs || []).map((b) => ({
           url: b.url,
+          // 让浏览器下载而不是内联打开（图片/音频用 url 会直接预览）
+          downloadUrl: b.downloadUrl || b.url,
           pathname: b.pathname,
           size: b.size,
           uploadedAt: b.uploadedAt,

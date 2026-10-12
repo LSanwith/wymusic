@@ -148,6 +148,19 @@
             white-space: nowrap;
         }
         .item .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+        /* 完整链接单独占一行，方便直接看到/选中/复制 */
+        .item .url {
+            flex: 1 1 100%;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 12px;
+            color: #9fd0ff;
+            text-decoration: none;
+            user-select: text;
+        }
+        .item .url:hover { text-decoration: underline; }
         .item .bar {
             flex: 1 1 100%;
             height: 4px;
@@ -327,24 +340,46 @@
                     el: el,
                     meta: function (t) { el.querySelector('.meta').textContent = t; },
                     progress: function (p) { el.querySelector('.bar > i').style.width = p + '%'; },
-                    done: function (url) {
-                        el.querySelector('.bar').remove();
+                    done: function (blob) {
+                        var bar = el.querySelector('.bar');
+                        if (bar) bar.remove();
                         var m = el.querySelector('.meta');
                         m.innerHTML = '';
-                        var a = document.createElement('a');
-                        a.href = url; a.target = '_blank'; a.rel = 'noopener';
-                        a.textContent = '打开';
-                        var copy = document.createElement('button');
-                        copy.textContent = '复制链接';
-                        copy.addEventListener('click', function () {
+
+                        var url = blob.url;
+                        /* downloadUrl 让浏览器下载而不是内联预览
+                           （图片/音频用 url 会被直接打开播放） */
+                        var dl = blob.downloadUrl || blob.url;
+
+                        function btn(text, handler) {
+                            var b = document.createElement('button');
+                            b.textContent = text;
+                            b.addEventListener('click', handler);
+                            return b;
+                        }
+
+                        m.appendChild(btn('下载', function () {
+                            window.location.href = dl;
+                        }));
+                        m.appendChild(btn('打开', function () {
+                            window.open(url, '_blank', 'noopener');
+                        }));
+                        m.appendChild(btn('复制链接', function () {
                             navigator.clipboard.writeText(url).then(function () {
-                                copy.textContent = '已复制';
-                                setTimeout(function () { copy.textContent = '复制链接'; }, 1500);
+                                var t = m.querySelector('button:last-child');
+                                t.textContent = '已复制';
+                                setTimeout(function () { t.textContent = '复制链接'; }, 1500);
                             });
-                        });
-                        m.appendChild(a);
-                        m.appendChild(document.createTextNode(' '));
-                        m.appendChild(copy);
+                        }));
+
+                        var link = document.createElement('a');
+                        link.className = 'url';
+                        link.href = url;
+                        link.target = '_blank';
+                        link.rel = 'noopener';
+                        link.textContent = url;
+                        link.title = url;
+                        el.appendChild(link);
                     },
                     fail: function (msg) {
                         el.querySelector('.bar').remove();
@@ -385,7 +420,7 @@
                             clientPayload: getKey() || undefined,
                             onUploadProgress: function (p) { row.progress(p.percentage); },
                         });
-                        row.done(blob.url);
+                        row.done(blob);
                     } catch (e) {
                         row.fail(e && e.message ? e.message : '上传失败');
                     }
@@ -458,8 +493,9 @@
                         meta.className = 'meta';
                         meta.textContent = fmtSize(b.size) + ' · ' + fmtTime(b.uploadedAt);
                         var dl = document.createElement('a');
-                        dl.href = b.url; dl.textContent = '下载';
-                        dl.setAttribute('download', '');
+                        /* 用 downloadUrl 触发下载；url 在图片/音频上会变成内联预览 */
+                        dl.href = b.downloadUrl || b.url;
+                        dl.textContent = '下载';
                         var copy = document.createElement('button');
                         copy.textContent = '复制链接';
                         copy.addEventListener('click', function () {
@@ -485,6 +521,14 @@
                         el.appendChild(dl);
                         el.appendChild(copy);
                         el.appendChild(rm);
+                        var link = document.createElement('a');
+                        link.className = 'url';
+                        link.href = b.url;
+                        link.target = '_blank';
+                        link.rel = 'noopener';
+                        link.textContent = b.url;
+                        link.title = b.url;
+                        el.appendChild(link);
                         blobList.appendChild(el);
                     });
                 } catch (e) {
