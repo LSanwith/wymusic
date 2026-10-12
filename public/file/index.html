@@ -367,6 +367,12 @@
                 try { return new Date(t).toLocaleString(); } catch (e) { return ''; }
             }
 
+            /** 链接只用于「显示」时解码一次，中文文件名更好看；
+                href 仍然是编码后的形式，保证可用 */
+            function prettyUrl(u) {
+                try { return decodeURIComponent(u); } catch (e) { return u; }
+            }
+
             /** 请求本站 JSON 接口；始终返回 {ok, status, data} */
             function api(path, opts) {
                 return fetch(path, opts).then(function (r) {
@@ -454,7 +460,7 @@
                         link.className = 'url';
                         link.href = share;
                         link.rel = 'noopener';
-                        link.textContent = share;
+                        link.textContent = prettyUrl(share);
                         link.title = share;
                         el.appendChild(link);
                     },
@@ -687,7 +693,7 @@
                         link.className = 'url';
                         link.href = shareUrl;
                         link.rel = 'noopener';
-                        link.textContent = shareUrl;
+                        link.textContent = prettyUrl(shareUrl);
                         link.title = '实际存储地址：' + b.url;
                         el.appendChild(link);
                         blobList.appendChild(el);
