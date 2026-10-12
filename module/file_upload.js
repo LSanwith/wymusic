@@ -18,6 +18,7 @@ const {
   alwaysTier,
   pubUsedThisMonth,
 } = require('../plugins/fileRetention.js')
+const { guard } = require('../plugins/filePass.js')
 
 const MAX_SIZE = 200 * 1024 * 1024 // 单文件上限 200MB
 
@@ -106,6 +107,11 @@ module.exports = async (query) => {
   }
 
   if (!process.env.BLOB_READ_WRITE_TOKEN) return noToken()
+
+  // 人机验证通行证。放在 upload-completed 分支之后：
+  // 那是 Vercel Blob 的回调，不带我们的通行证，且没有任何副作用。
+  const denied = guard(query)
+  if (denied) return denied
 
   // clientPayload 是 @vercel/blob/client 唯一能传自定义数据的通道
   const payload = parsePayload(query.payload && query.payload.clientPayload)

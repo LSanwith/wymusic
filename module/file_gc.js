@@ -6,9 +6,14 @@
 // 在 Vercel 项目的 Settings → Cron Jobs 里加一个每天执行的 /file/gc 即可。
 //
 // 不加口令保护：它只会删除早已过期的临时文件，删不掉永久文件，重复调用也无副作用。
+// 但配了人机验证时仍要求带通行证，免得被当成免费的定时触发器刷。
 const { TEMP_DAYS, gcExpired } = require('../plugins/fileRetention.js')
+const { guard } = require('../plugins/filePass.js')
 
-module.exports = async () => {
+module.exports = async (query) => {
+  const denied = guard(query)
+  if (denied) return denied
+
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     return {
       status: 501,

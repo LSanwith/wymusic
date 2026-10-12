@@ -18,6 +18,7 @@ const {
   pubUsedThisMonth,
   gcExpired,
 } = require('../plugins/fileRetention.js')
+const { guard } = require('../plugins/filePass.js')
 
 const GC_INTERVAL_MS = 10 * 60 * 1000
 let lastGcAt = 0
@@ -48,6 +49,9 @@ function gateFail() {
 }
 
 module.exports = async (query) => {
+  const denied = guard(query)
+  if (denied) return denied
+
   if (!process.env.BLOB_READ_WRITE_TOKEN) return noToken()
 
   const gate = process.env.FILE_UPLOAD_KEY

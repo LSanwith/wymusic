@@ -16,8 +16,12 @@ const {
   alwaysTier,
   pubUsedThisMonth,
 } = require('../plugins/fileRetention.js')
+const { guard } = require('../plugins/filePass.js')
 
 module.exports = async (query) => {
+  const denied = guard(query)
+  if (denied) return denied
+
   const key = String(query.always || '').trim()
 
   if (!key) {

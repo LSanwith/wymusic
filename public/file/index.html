@@ -189,6 +189,30 @@
             .block { padding: 16px; }
             header.site-header h1 { font-size: 22px; }
         }
+
+        /* 人机验证遮罩。用 fixed 全屏，未通过前挡住整个页面 */
+        .verify-gate {
+            position: fixed;
+            inset: 0;
+            z-index: 50;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(10, 12, 18, 0.85);
+        }
+        /* [hidden] 必须压过上面的 display:flex，否则藏不住 */
+        .verify-gate[hidden] { display: none; }
+        .verify-box {
+            width: min(92vw, 400px);
+            padding: 24px 22px;
+            text-align: center;
+            background: rgba(28, 30, 38, 0.97);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 14px;
+        }
+        .verify-box h2 { margin: 0 0 10px; font-size: 17px; }
+        .verify-box .hint { min-height: 18px; }
+        .verify-box #turnstileBox { margin-top: 14px; min-height: 65px; }
     </style>
 </head>
 <body>
@@ -211,6 +235,15 @@
         </header>
 
         <div id="notice" class="notice" hidden></div>
+
+        <!-- 人机验证遮罩：只有服务端配了 Turnstile 密钥才会出现 -->
+        <div id="verifyGate" class="verify-gate" hidden>
+            <div class="verify-box">
+                <h2>人机验证</h2>
+                <p class="hint" id="verifyHint">正在加载验证组件…</p>
+                <div id="turnstileBox"></div>
+            </div>
+        </div>
 
         <section class="block">
             <h2>上传文件</h2>
@@ -263,6 +296,8 @@
             ];
             var KEY_STORE = 'bmusic.fileProxy.key';
             var ALWAYS_STORE = 'bmusic.fileProxy.always';
+            /* 人机验证通行证：服务端签发的带过期时间的串，存在本机 */
+            var PASS_STORE = 'bmusic.fileProxy.pass';
 
             var $ = function (id) { return document.getElementById(id); };
             var notice = $('notice');
@@ -280,6 +315,98 @@
             }
             function getKey() { return readStore(KEY_STORE); }
             function getAlways() { return readStore(ALWAYS_STORE); }
+            function getPass() { return readStore(PASS_STORE); }
+            function setPass(v) { writeStore(PASS_STORE, v); }
+            function clearPass() { try { localStorage.removeItem(PASS_STORE); } catch (e) { /* 忽略 */ } }
+
+            /* ---------- 人机验证（Cloudflare Turnstile） ---------- */
+            var TURNSTILE_SRC =
+                'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+            var verifyOn = false;
+            var siteKey = '';
+            var widgetId = null;
+            var gateBusy = false;
+
+            /** 管理类请求都带上通行证；没配验证时原样返回 */
+            function withPass(url) {
+                var p = getPass();
+                if (!verifyOn || !p) return url;
+                return url + (url.indexOf('?') >= 0 ? '&' : '?') +
+                    'pass=' + encodeURIComponent(p);
+            }
+
+            function showGate(msg) {
+                var g = $('verifyGate');
+                if (g) g.hidden = false;
+                /* 第一次弹就把组件渲染出来；已经渲染过就只更新文案
+                   （通行证过期时会走这条，直接复用原来的组件） */
+                if (verifyOn && widgetId === null) renderTurnstile(msg);
+                else if (msg) setGateHint(msg);
+            }
+            function setGateHint(t) {
+                var h = $('verifyHint');
+                if (h) h.textContent = t;
+            }
+
+            /** 按需加载 Turnstile 脚本（只在真的要验证时才拉） */
+            function loadTurnstile() {
+                if (window.turnstile) return Promise.resolve();
+                return new Promise(function (resolve, reject) {
+                    var s = document.createElement('script');
+                    s.src = TURNSTILE_SRC;
+                    s.async = true;
+                    s.defer = true;
+                    s.onload = function () { resolve(); };
+                    s.onerror = function () { reject(new Error('脚本加载失败')); };
+                    document.head.appendChild(s);
+                });
+            }
+
+            /** 用户过了验证：拿令牌换通行证 */
+            async function onTurnstileToken(token) {
+                if (gateBusy) return;
+                gateBusy = true;
+                setGateHint('正在校验…');
+                try {
+                    var r = await api('/file/verify?token=' + encodeURIComponent(token) +
+                        '&_=' + Date.now());
+                    if (r.ok && r.data && r.data.pass) {
+                        setPass(r.data.pass);
+                        $('verifyGate').hidden = true;
+                        startApp();
+                    } else {
+                        setGateHint((r.data && r.data.msg) || '验证失败，请重试');
+                        if (window.turnstile && widgetId !== null) turnstile.reset(widgetId);
+                    }
+                } catch (e) {
+                    setGateHint('验证请求失败：' + (e.message || e));
+                }
+                gateBusy = false;
+            }
+
+            function renderTurnstile(msg) {
+                if (!siteKey) {
+                    setGateHint('服务端启用了人机验证，但没有配置 TURNSTILE_SITE_KEY，请联系站长。');
+                    return;
+                }
+                setGateHint(msg || '请完成下面的验证');
+                loadTurnstile()
+                    .then(function () {
+                        widgetId = turnstile.render('#turnstileBox', {
+                            sitekey: siteKey,
+                            language: 'zh-cn',
+                            theme: 'dark',
+                            callback: onTurnstileToken,
+                            'error-callback': function () {
+                                setGateHint('验证组件报错，请刷新页面重试');
+                            },
+                        });
+                    })
+                    .catch(function () {
+                        setGateHint('无法加载验证组件（challenges.cloudflare.com 不可达），' +
+                            '请检查网络或代理后刷新重试');
+                    });
+            }
 
             $('gateKey').value = getKey();
             $('alwaysKey').value = getAlways();
@@ -329,8 +456,8 @@
             async function checkAlways() {
                 var key = getAlways();
                 try {
-                    var r = await api('/file/always?_=' + Date.now() +
-                        (key ? '&always=' + encodeURIComponent(key) : ''));
+                    var r = await api(withPass('/file/always?_=' + Date.now() +
+                        (key ? '&always=' + encodeURIComponent(key) : '')));
                     alwaysState = r.data || alwaysState;
                 } catch (e) {
                     alwaysState = { tier: key ? 'unknown' : 'none', limit: 5, used: null, left: null };
@@ -340,7 +467,6 @@
                 else quotaInfo.className = 'hint';
                 return alwaysState;
             }
-            checkAlways();
 
             /* ---------- 通用 ---------- */
             function showNotice(html) {
@@ -491,6 +617,12 @@
             function api(path, opts) {
                 return fetch(path, opts).then(function (r) {
                     return r.json().catch(function () { return {}; }).then(function (j) {
+                        /* 服务端说没通行证 / 通行证过期：清掉本地的并重新弹验证 */
+                        if (j && j.needVerify) {
+                            clearPass();
+                            showGate('需要完成人机验证');
+                            if (window.turnstile && widgetId !== null) turnstile.reset(widgetId);
+                        }
                         return { ok: r.ok, status: r.status, data: j };
                     });
                 });
@@ -625,7 +757,7 @@
                     try {
                         var blob = await sdk.upload(folder + '/' + file.name, file, {
                             access: 'public',
-                            handleUploadUrl: '/file/upload',
+                            handleUploadUrl: withPass('/file/upload'),
                             clientPayload: JSON.stringify({ gate: getKey(), always: getAlways() }),
                             onUploadProgress: function (p) { row.progress(p.loaded, p.total); },
                         });
@@ -645,8 +777,8 @@
                 listInfo.className = 'hint';
                 listInfo.textContent = '加载中…';
                 try {
-                    var r = await api('/file/list?_=' + Date.now() +
-                        (getKey() ? '&key=' + encodeURIComponent(getKey()) : ''));
+                    var r = await api(withPass('/file/list?_=' + Date.now() +
+                        (getKey() ? '&key=' + encodeURIComponent(getKey()) : '')));
                     if (r.status === 501) {
                         blobList.innerHTML = '';
                         listInfo.textContent = '';
@@ -747,9 +879,9 @@
                             rm.textContent = '删除中…';
                             /* 带上时间戳绕开服务端 2 分钟的接口缓存，
                                否则删完再拉列表可能拿回删除前的旧数据 */
-                            var d = await api('/file/list?del=' + encodeURIComponent(b.url) +
+                            var d = await api(withPass('/file/list?del=' + encodeURIComponent(b.url) +
                                 (getKey() ? '&key=' + encodeURIComponent(getKey()) : '') +
-                                '&_=' + Date.now());
+                                '&_=' + Date.now()));
                             if (d.ok) {
                                 el.remove();
                                 listInfo.textContent = '已删除 ' + (b.pathname || '');
@@ -787,7 +919,26 @@
                 }
             }
             $('refreshBtn').addEventListener('click', loadBlobs);
-            loadBlobs();
+
+            /** 验证通过（或压根没开验证）后才真正开始拉数据 */
+            function startApp() {
+                checkAlways();
+                loadBlobs();
+            }
+
+            /* 启动：先问服务端开没开人机验证。
+               没开就直接跑；开了且本机没有通行证，就先弹验证框。
+               通行证过期的情况交给 api() —— 它看到 needVerify 会重新弹出。 */
+            (async function boot() {
+                var cfg = await api('/file/verify?_=' + Date.now());
+                verifyOn = !!(cfg.ok && cfg.data && cfg.data.enabled);
+                siteKey = (cfg.data && cfg.data.siteKey) || '';
+                if (verifyOn && !getPass()) {
+                    showGate();
+                    return;
+                }
+                startApp();
+            })();
         })();
     </script>
 </body>
