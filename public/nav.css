@@ -47,12 +47,38 @@
   border-color: rgba(255, 255, 255, 0.22);
   color: #fff;
 }
-/* 品牌名沉到侧栏底部 */
+/* 侧栏底部：原先只放站名，现在放 GitHub / 添加管理员QQ 两个链接 */
 .nav-brand {
   margin-top: auto;
   padding-left: 14px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   font-size: 13px;
   color: rgba(255, 255, 255, 0.45);
+}
+/* 这两个链接不是导航项，要盖掉 .nav a 的按钮外观 */
+.nav .nav-brand a {
+  display: inline;
+  padding: 0 0 1px;
+  border: 0;
+  border-bottom: 1px dotted rgba(255, 255, 255, 0.3);
+  border-radius: 0;
+  background: none;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.72);
+  text-decoration: none;
+}
+.nav .nav-brand a:hover {
+  background: none;
+  border-bottom-color: #fff;
+  border-bottom-style: solid;
+  color: #fff;
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.35);
+}
+.nav .nav-brand .footer-sep {
+  color: rgba(255, 255, 255, 0.3);
 }
 
 /* 正文给侧栏让出位置。用 body 的 padding 而不是改各页 .container，
@@ -85,13 +111,25 @@
     margin-left: auto;
     padding-left: 0;
   }
+  .nav .nav-brand a {
+    padding: 0 0 1px;
+    font-size: 13px;
+  }
   .nav a {
     padding: 6px 12px;
     font-size: 13px;
   }
 }
+/* 很窄的屏幕上让侧栏底部这两个链接换行，而不是被裁掉 */
 @media (max-width: 480px) {
+  .nav {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
   .nav-brand {
-    display: none;
+    margin-left: 0;
+  }
+  .nav .nav-brand a {
+    font-size: 12px;
   }
 }

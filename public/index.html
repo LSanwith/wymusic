@@ -252,34 +252,8 @@
             border-bottom-color: #fff;
             text-shadow: 0 0 12px rgba(255,255,255,0.4);
         }
-        footer.site-footer {
-            position: relative;
-            z-index: 1;
-            margin-top: 24px;
-            padding-top: 14px;
-            border-top: 1px solid rgba(255,255,255,0.1);
-            color: rgba(255,255,255,0.55);
-            text-align: center;
-            font-size: 14px;
-            user-select: none;
-        }
-        footer.site-footer a {
-            color: #fff;
-            text-decoration: none;
-            border-bottom: 1px dotted rgba(255,255,255,0.3);
-            transition: 0.25s;
-            padding-bottom: 1px;
-            margin: 0 6px;
-        }
-        footer.site-footer a:hover {
-            border-bottom-color: #fff;
-            border-bottom-style: solid;
-            text-shadow: 0 0 10px rgba(255,255,255,0.35);
-        }
-        footer.site-footer .footer-sep {
-            color: rgba(255,255,255,0.3);
-            margin: 0 4px;
-        }
+        /* 原页脚 site-footer 的样式已随页脚一起移除：
+           GitHub / 添加管理员QQ 两个链接现在放在左侧栏底部（见 nav.css） */
         .block::before {
             content: '';
             position: absolute;
@@ -350,7 +324,11 @@
             <a href="/" class="active">音乐界面</a>
             <a href="/file/">文件挂载代理</a>
         </div>
-        <span class="nav-brand">Sanwith</span>
+        <span class="nav-brand">
+            <a href="https://github.com/neteasecloudmusicapienhanced/api-enhanced" target="_blank" rel="noopener">GitHub</a>
+            <span class="footer-sep">|</span>
+            <a href="https://qm.qq.com/q/eetuZkIV20" target="_blank" rel="noopener">添加管理员QQ</a>
+        </span>
     </nav>
     <main class="container">
         <header class="site-header">
@@ -406,12 +384,6 @@ curl -s {origin}/search?keywords=网易云</code></pre>
                 <a href="/ugc_lottery.html" data-tooltip="云小编每日抽奖">云小编每日抽奖</a>
             </div>
         </section>
-
-        <footer class="site-footer">
-            <a href="https://github.com/neteasecloudmusicapienhanced/api-enhanced" target="_blank">GitHub</a>
-            <span class="footer-sep">|</span>
-            <a href="https://qm.qq.com/q/eetuZkIV20" target="_blank">添加管理员QQ</a>
-        </footer>
     </main>
 
     <script>
