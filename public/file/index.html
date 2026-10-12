@@ -207,7 +207,7 @@
     <main class="container">
         <header class="site-header">
             <h1>文件挂载代理</h1>
-            <p class="sub">上传文件 · 通过 URL 下载</p>
+            <p class="sub">上传文件 · 永久保存</p>
         </header>
 
         <div id="notice" class="notice" hidden></div>
@@ -225,15 +225,6 @@
             </div>
             <div class="hint" id="uploadHint">文件直接从浏览器传到 Vercel Blob，不经过接口转发，因此不受 4.5MB 限制。</div>
             <div class="list" id="uploadList"></div>
-        </section>
-
-        <section class="block">
-            <h2>通过 URL 下载</h2>
-            <div class="row">
-                <input type="url" id="dlUrl" placeholder="https://example.com/file.zip">
-                <button id="dlBtn">下载</button>
-            </div>
-            <div class="hint" id="dlInfo">小于 4MB 的文件由本站代理转发，可绕开防盗链；更大的文件会自动改为直连源站下载。</div>
         </section>
 
         <!-- 只有服务端真的设了 FILE_UPLOAD_KEY（列表返回 403）才显示，
@@ -278,7 +269,6 @@
             var uploadList = $('uploadList');
             var blobList = $('blobList');
             var listInfo = $('listInfo');
-            var dlInfo = $('dlInfo');
             var quotaInfo = $('quotaInfo');
 
             /* ---------- 口令 ---------- */
@@ -380,18 +370,6 @@
                         return { ok: r.ok, status: r.status, data: j };
                     });
                 });
-            }
-
-            /** 把二进制存成文件；浏览器下载时用这个名字 */
-            function saveBlob(blob, name) {
-                var url = URL.createObjectURL(blob);
-                var a = document.createElement('a');
-                a.href = url;
-                a.download = name || 'download';
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
             }
 
             /* ---------- 上传组件（按需从 CDN 加载） ---------- */
@@ -533,37 +511,6 @@
                 btn.disabled = false;
                 $('fileInput').value = '';
                 loadBlobs();
-            });
-
-            /* ---------- 通过 URL 下载 ---------- */
-            $('dlBtn').addEventListener('click', async function () {
-                var raw = $('dlUrl').value.trim();
-                if (!raw) { dlInfo.textContent = '请先填写文件地址'; dlInfo.className = 'hint err'; return; }
-                var btn = this;
-                btn.disabled = true;
-                dlInfo.className = 'hint';
-                dlInfo.textContent = '正在探测文件…';
-                try {
-                    var probe = await api('/file/dl?probe=1&url=' + encodeURIComponent(raw));
-                    if (!probe.ok) throw new Error((probe.data && probe.data.msg) || ('探测失败 HTTP ' + probe.status));
-                    var meta = probe.data;
-
-                    if (meta.proxy) {
-                        dlInfo.textContent = '正在经由本站转发… ' + fmtSize(meta.size);
-                        var r = await fetch('/file/dl?url=' + encodeURIComponent(raw));
-                        if (!r.ok) throw new Error('转发失败 HTTP ' + r.status);
-                        saveBlob(await r.blob(), meta.name);
-                        dlInfo.textContent = '已开始下载：' + meta.name + ' · ' + fmtSize(meta.size);
-                        dlInfo.className = 'hint ok';
-                    } else {
-                        dlInfo.textContent = '文件 ' + fmtSize(meta.size) + ' 超过 4MB，改为直连源站下载…';
-                        window.location.href = '/file/dl?url=' + encodeURIComponent(raw);
-                    }
-                } catch (e) {
-                    dlInfo.textContent = e.message || '下载失败';
-                    dlInfo.className = 'hint err';
-                }
-                btn.disabled = false;
             });
 
             /* ---------- 已上传文件 ---------- */
