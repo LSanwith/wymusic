@@ -3,12 +3,22 @@
 // 浏览器拿到令牌后用 @vercel/blob/client 的 upload() 把文件【直传】Blob，
 // 文件本身不经过本函数，因此不受 Vercel 函数 4.5MB 请求体上限约束（大文件也能传）。
 //
-// 依赖：在 Vercel 项目的 Storage 里创建一个 Blob store，环境变量
+// 保存期由路径前缀决定（见 plugins/fileRetention.js）：
+//   不填口令        -> tmp/       7 天后自动清理
+//   口令 FileAlways -> keep-pub/  永久保存，全站每月共享 5 次
+//   私有口令        -> keep-vip/  永久保存，不限次数
+//
+// 依赖：在 Vercel 项目的 Storage 里创建一个 Blob store（选 Public），环境变量
 //       BLOB_READ_WRITE_TOKEN 会自动注入；未配置时本接口返回 501 与提示。
 //
-// 防盗用（可选）：设置环境变量 FILE_UPLOAD_KEY 后，上传必须带上同一个 key。
-//       不设置则任何拿到网址的人都能往你的 Blob store 里传文件（会产生费用），
-//       公开部署强烈建议设置。
+// 防盗用（可选）：设置环境变量 FILE_UPLOAD_KEY 后，上传必须带上同一个 gate。
+const {
+  PREFIX,
+  PUB_MONTHLY_LIMIT,
+  alwaysTier,
+  pubUsedThisMonth,
+} = require('../plugins/fileRetention.js')
+
 const MAX_SIZE = 200 * 1024 * 1024 // 单文件上限 200MB
 
 function noToken() {
@@ -31,6 +41,17 @@ function safePathname(input) {
     .slice(0, 180)
 }
 
+/** clientPayload 是 JSON 字符串 {gate, always}；兼容直接传纯文本 gate 的写法 */
+function parsePayload(raw) {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : { gate: String(raw) }
+  } catch {
+    return { gate: String(raw) }
+  }
+}
+
 module.exports = async (query) => {
   const type = query.type
 
@@ -48,19 +69,53 @@ module.exports = async (query) => {
 
   if (!process.env.BLOB_READ_WRITE_TOKEN) return noToken()
 
-  // 口令可以从查询串带（直接 fetch 调用），也可以走 clientPayload
-  // （@vercel/blob/client 的 upload() 只允许通过 clientPayload 传自定义数据）
+  // clientPayload 是 @vercel/blob/client 唯一能传自定义数据的通道
+  const payload = parsePayload(query.payload && query.payload.clientPayload)
+
+  // 总开关口令：保护整个文件功能不被陌生人使用
   const gate = process.env.FILE_UPLOAD_KEY
-  if (gate) {
-    const sent =
-      query.key || (query.payload && query.payload.clientPayload) || ''
-    if (String(sent) !== gate) {
-      return { status: 403, body: { code: 403, msg: '上传口令不正确' } }
+  if (gate && String(payload.gate || query.key || '') !== gate) {
+    return { status: 403, body: { code: 403, msg: '上传口令不正确' } }
+  }
+
+  // 永久保存口令
+  const wanted = String(payload.always || '').trim()
+  const tier = alwaysTier(wanted)
+  if (wanted && !tier) {
+    return {
+      status: 403,
+      body: { code: 403, msg: '永久保存口令不正确（留空则按 7 天有效上传）' },
     }
   }
 
-  const pathname = safePathname(query.payload && query.payload.pathname)
-  if (!pathname) {
+  let prefix = PREFIX.temp
+  if (tier === 'vip') {
+    prefix = PREFIX.vip
+  } else if (tier === 'pub') {
+    let used
+    try {
+      used = await pubUsedThisMonth()
+    } catch {
+      // 统计失败时不放行，避免把公开额度算漏
+      return {
+        status: 502,
+        body: { code: 502, msg: '暂时无法核对公开口令次数，请稍后再试' },
+      }
+    }
+    if (used >= PUB_MONTHLY_LIMIT) {
+      return {
+        status: 429,
+        body: {
+          code: 429,
+          msg: `公开口令本月 ${PUB_MONTHLY_LIMIT} 次已用完（下月恢复）；不填口令仍可按 7 天有效上传。`,
+        },
+      }
+    }
+    prefix = PREFIX.pub
+  }
+
+  const base = safePathname(query.payload && query.payload.pathname)
+  if (!base) {
     return { status: 400, body: { code: 400, msg: '缺少文件名' } }
   }
 
@@ -69,7 +124,7 @@ module.exports = async (query) => {
   } = require('@vercel/blob/client')
   try {
     const clientToken = await generateClientTokenFromReadWriteToken({
-      pathname,
+      pathname: prefix + base,
       addRandomSuffix: true,
       maximumSizeInBytes: MAX_SIZE,
     })
