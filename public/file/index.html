@@ -217,7 +217,7 @@
             <div class="gate">
                 <label for="alwaysKey">永久保存口令（留空则文件 7 天后自动清理）</label>
                 <input type="password" id="alwaysKey" placeholder="留空 = 7 天有效，填对则永久保存" autocomplete="off">
-                <div class="hint" id="quotaInfo">公开口令每月共 5 次，次数用完可等下月，或直接留空按 7 天上传。</div>
+                <div class="hint" id="quotaInfo">公开口令每月共 5 次（KEY=FileAlways，现已使用（—）次）</div>
             </div>
             <div class="hint" id="uploadHint">文件直接从浏览器传到 Vercel Blob，不经过接口转发，因此不受 4.5MB 限制。</div>
             <div class="list" id="uploadList"></div>
@@ -525,11 +525,12 @@
                     if (!r.ok) throw new Error((r.data && r.data.msg) || ('HTTP ' + r.status));
 
                     var q = r.data.quota || {};
-                    if (q.left === null || q.left === undefined) {
-                        quotaInfo.textContent = '公开口令每月共 ' + (q.limit || 5) + ' 次，次数用完可等下月，或直接留空按 7 天上传。';
-                    } else {
-                        quotaInfo.textContent = '公开口令本月剩余 ' + q.left + '/' + (q.limit || 5) +
-                            ' 次（已用 ' + q.used + ' 次，全站共享），次数用完可等下月，或直接留空按 7 天上传。';
+                    var qLimit = q.limit || 5;
+                    var qUsed = (q.used === null || q.used === undefined) ? '—' : q.used;
+                    quotaInfo.textContent = '公开口令每月共 ' + qLimit + ' 次（KEY=FileAlways，现已使用（' +
+                        qUsed + '）次）';
+                    if (q.left === 0) {
+                        quotaInfo.textContent += ' —— 本月已用完，下月恢复';
                     }
 
                     var blobs = r.data.blobs || [];
