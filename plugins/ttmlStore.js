@@ -175,16 +175,37 @@ async function readLegacy(songId) {
 
 /**
  * 保存：内容只写一份，再给每个歌曲 id 建立绑定。
- * 返回 { ttmlId, bound, already, rebound, prevTtmlId }：
- *   bound   这次新建的绑定
- *   already 本来就已经绑到同一份内容的（不用重复处理）
- *   rebound 原来绑着别的歌词，这次改绑到这份
- *   prevTtmlId  Map 语义的旧绑定，供上层提示「从哪份改绑过来的」
+ *
+ * **歌曲 id 为准**：一个 id 同一时间只能绑一份歌词。
+ * 如果它已经绑在别的 TTML 上，这里直接判冲突、什么都不写 ——
+ * 必须先显式解绑（/ttml/unbind，歌曲 id + ttmlId 配对）再绑新的。
+ * 这样可以避免「换个内容重新提交」把别人的绑定悄悄覆盖掉。
+ *
+ * 返回 { ttmlId, url, bound, already, conflicts, blocked }
+ *   conflicts  [{ id, boundTo }] 已有绑定冲突的 id
+ *   blocked    true 表示因为冲突没有写入任何东西
  */
 async function save(ids, ttml) {
   const { put } = require('@vercel/blob')
   const content = String(ttml == null ? '' : ttml)
   const ttmlId = ttmlIdOf(content)
+
+  // 先体检再写：不允许静默改绑
+  const already = []
+  const conflicts = []
+  for (const id of ids) {
+    if (await isBound(id, ttmlId)) {
+      already.push(id)
+      continue
+    }
+    const cur = await bindingOf(id)
+    if (cur && cur.ttmlId !== ttmlId) {
+      conflicts.push({ id: String(id), boundTo: cur.ttmlId })
+    }
+  }
+  if (conflicts.length) {
+    return { ttmlId, url: null, bound: [], already, conflicts, blocked: true }
+  }
 
   // 内容同 id 覆盖写：同内容天然幂等
   const res = await put(contentKey(ttmlId), content, {
@@ -195,20 +216,8 @@ async function save(ids, ttml) {
   })
 
   const bound = []
-  const already = []
-  const rebound = []
-  const prev = {}
   for (const id of ids) {
-    // 精确判断：不依赖 list，避免刚绑上查不到
-    if (await isBound(id, ttmlId)) {
-      already.push(id)
-      continue
-    }
-    const cur = await bindingOf(id)
-    if (cur && cur.ttmlId !== ttmlId) {
-      prev[id] = cur.ttmlId
-      rebound.push(id)
-    }
+    if (already.includes(id)) continue
     await put(
       bindKey(id, ttmlId),
       JSON.stringify({ songId: String(id), ttmlId }),
@@ -219,20 +228,10 @@ async function save(ids, ttml) {
         addRandomSuffix: false,
       },
     )
-    // 旧绑定点删掉；旧内容没人用就回收
-    if (cur && cur.ttmlId !== ttmlId) {
-      const { del } = require('@vercel/blob')
-      try {
-        await del(cur.url)
-      } catch {
-        /* 旧的删不掉不影响这次绑定 */
-      }
-      await gcContent(cur.ttmlId)
-    }
     bound.push(id)
   }
 
-  return { ttmlId, url: res.url, bound, already, rebound, prev }
+  return { ttmlId, url: res.url, bound, already, conflicts: [], blocked: false }
 }
 
 /** 读取某个歌曲 id 的歌词；不存在返回 null */
@@ -370,6 +369,136 @@ async function unbind(songId, ttmlId) {
   }
 }
 
+/** 列出所有内容与绑定（后台用） */
+async function listAll() {
+  const { list } = require('@vercel/blob')
+
+  const contents = []
+  let cursor
+  do {
+    const page = await list({ prefix: CONTENT_PREFIX, cursor, limit: 200 })
+    for (const b of page.blobs || []) {
+      const m = /^ttml\/c\/([0-9a-f]{16})\.ttml$/.exec(b.pathname)
+      if (m) {
+        contents.push({
+          ttmlId: m[1],
+          size: b.size,
+          uploadedAt: b.uploadedAt,
+          url: b.url,
+        })
+      }
+    }
+    cursor = page.cursor
+  } while (cursor)
+
+  const binds = []
+  cursor = undefined
+  do {
+    const page = await list({ prefix: BIND_PREFIX, cursor, limit: 500 })
+    for (const b of page.blobs || []) {
+      const m = /^ttml\/b\/(\d+)--([0-9a-f]{16})\.json$/.exec(b.pathname)
+      if (m) binds.push({ songId: m[1], ttmlId: m[2], url: b.url })
+    }
+    cursor = page.cursor
+  } while (cursor)
+
+  const byId = new Map()
+  for (const c of contents) byId.set(c.ttmlId, { ...c, ids: [], orphan: false })
+  for (const b of binds) {
+    if (!byId.has(b.ttmlId)) {
+      // 绑定还在、内容没了 —— 说明之前删漏了，标出来好清理
+      byId.set(b.ttmlId, {
+        ttmlId: b.ttmlId,
+        size: null,
+        uploadedAt: null,
+        url: null,
+        ids: [],
+        orphan: true,
+      })
+    }
+    byId.get(b.ttmlId).ids.push(b.songId)
+  }
+
+  // 老格式：ttml/<歌曲id>.ttml（内容就是文件本身）
+  const legacy = []
+  cursor = undefined
+  do {
+    const page = await list({ prefix: PREFIX, cursor, limit: 500 })
+    for (const b of page.blobs || []) {
+      const m = /^ttml\/(\d+)\.ttml$/.exec(b.pathname)
+      if (m) {
+        legacy.push({
+          songId: m[1],
+          pathname: b.pathname,
+          url: b.url,
+          size: b.size,
+          uploadedAt: b.uploadedAt,
+        })
+      }
+    }
+    cursor = page.cursor
+  } while (cursor)
+
+  const items = [...byId.values()].map((it) => ({
+    ...it,
+    ids: it.ids.sort(),
+  }))
+  items.sort((a, b) =>
+    String(b.uploadedAt || '').localeCompare(String(a.uploadedAt || '')),
+  )
+
+  return {
+    items,
+    legacy,
+    total: items.length,
+    bindingCount: binds.length,
+    contentCount: contents.length,
+  }
+}
+
+/**
+ * 真删除一份 TTML：
+ *   1. 删掉所有指向它的绑定（歌曲 id 自动解绑）
+ *   2. 删掉内容本体（Blob 上不留）
+ * 按路径精确删，不依赖 list 的完整性做判断。
+ */
+async function destroyTtml(ttmlId) {
+  const { del, head, list } = require('@vercel/blob')
+  if (!isValidTtmlId(ttmlId)) {
+    return { ttmlId, unbound: [], contentDeleted: false, error: 'ttmlId 非法' }
+  }
+
+  const unbound = []
+  let cursor
+  do {
+    const page = await list({ prefix: BIND_PREFIX, cursor, limit: 500 })
+    for (const b of page.blobs || []) {
+      if (!b.pathname.endsWith('--' + ttmlId + '.json')) continue
+      const m = /^ttml\/b\/(\d+)--/.exec(b.pathname)
+      try {
+        await del(b.url)
+        if (m) unbound.push(m[1])
+      } catch {
+        /* 单条删不掉不影响其它 */
+      }
+    }
+    cursor = page.cursor
+  } while (cursor)
+
+  let contentDeleted = false
+  try {
+    const meta = await head(contentKey(ttmlId))
+    if (meta && meta.url) {
+      await del(meta.url)
+      contentDeleted = true
+    }
+  } catch {
+    contentDeleted = false
+  }
+
+  return { ttmlId, unbound, contentDeleted }
+}
+
 /**
  * 对外展示的下载地址：走本站域名，不把 Blob 的随机子域暴露出去。
  * 域名可用 PUBLIC_BASE_URL 覆盖，默认就是站点本身。
@@ -401,5 +530,7 @@ module.exports = {
   gcContent,
   listBindings,
   bindingsOfTtml,
+  listAll,
+  destroyTtml,
   downloadUrl,
 }

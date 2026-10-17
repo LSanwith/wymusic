@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="/docs/netease.png">
+    <title>TTML 后台 · Sanwith</title>
+    <link rel="stylesheet" href="/nav.css">
+    <style>
+        :root {
+            --fg: #fff;
+            --muted: rgba(255, 255, 255, 0.7);
+            --card-bg: rgba(255, 255, 255, 0.09);
+            --card-border: rgba(255, 255, 255, 0.15);
+            --btn-bg: rgba(255, 255, 255, 0.12);
+            --ok: #7ee2a8;
+            --err: #ff9c9c;
+        }
+        * { box-sizing: border-box; }
+        html { scrollbar-width: none; -ms-overflow-style: none; }
+        html::-webkit-scrollbar { display: none; }
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: var(--fg);
+            background: #0a0a0c;
+            line-height: 1.6;
+            position: relative;
+            overflow-x: hidden;
+        }
+        body::before {
+            content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+            background: url('/bg.jpg') center / cover no-repeat;
+        }
+        body::after {
+            content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+            background: rgba(0, 0, 0, 0.72);
+        }
+        .container { max-width: 1040px; margin: 32px auto 60px; padding: 0 20px; position: relative; z-index: 1; }
+        header.site-header { margin-bottom: 22px; }
+        header.site-header h1 { font-size: 28px; font-weight: 600; margin: 0; }
+        header.site-header .sub { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+        .block {
+            background: var(--card-bg); border: 1px solid var(--card-border);
+            border-radius: 14px; padding: 18px 20px; margin-bottom: 16px;
+            backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+        }
+        .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+        button {
+            padding: 8px 14px; font-size: 13px; font-family: inherit; color: var(--fg);
+            background: var(--btn-bg); border: 1px solid var(--card-border);
+            border-radius: 9px; cursor: pointer; transition: background 0.18s;
+        }
+        button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.2); }
+        button:disabled { opacity: 0.45; cursor: not-allowed; }
+        button.danger { border-color: rgba(255, 120, 120, 0.45); color: #ffb3b3; }
+        button.danger:hover:not(:disabled) { background: rgba(255, 120, 120, 0.18); }
+        .stat { display: flex; flex-wrap: wrap; gap: 18px; font-size: 13px; color: var(--muted); }
+        .stat b { color: var(--fg); font-weight: 600; }
+        .item {
+            border: 1px solid var(--card-border); border-radius: 12px;
+            padding: 12px 14px; margin-bottom: 10px; background: rgba(0, 0, 0, 0.22);
+        }
+        .item .top { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+        .tid { font-family: ui-monospace, Consolas, monospace; font-size: 13.5px; color: #9ecbff; }
+        .meta { font-size: 12px; color: var(--muted); }
+        .ids { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        .chip {
+            font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+            padding: 2px 8px; border-radius: 999px;
+            background: rgba(126, 226, 168, 0.14); color: var(--ok);
+            border: 1px solid rgba(126, 226, 168, 0.35);
+        }
+        .noids { font-size: 12px; color: var(--err); }
+        .hint { color: var(--muted); font-size: 13px; }
+        .hint.err { color: var(--err); }
+        .hint.ok { color: var(--ok); }
+        a { color: #9ecbff; }
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-list">
+            <a href="/">音乐界面</a>
+            <a href="/file/">文件挂载代理</a>
+            <a href="/ttml/">TTML 歌词</a>
+            <a href="/ttml/admin/" class="active">TTML 后台</a>
+        </div>
+        <span class="nav-brand">
+            <a href="https://github.com/neteasecloudmusicapianhanced/api-enhanced" target="_blank" rel="noopener">GitHub</a>
+            <span class="footer-sep">|</span>
+            <a href="https://qm.qq.com/eetuZkIV20" target="_blank" rel="noopener">添加管理员QQ</a>
+        </span>
+    </nav>
+
+    <main class="container">
+        <header class="site-header">
+            <h1>TTML 后台</h1>
+            <p class="sub">所有已上传的 TTML 与其绑定的歌曲 id；删除会真删 Blob 内容并自动解绑全部 id</p>
+        </header>
+
+        <section class="block">
+            <div class="row" style="justify-content: space-between">
+                <div class="stat" id="stat">
+                    <span>TTML <b id="nTotal">—</b> 份</span>
+                    <span>绑定 <b id="nBind">—</b> 条</span>
+                    <span>老格式 <b id="nLegacy">—</b> 个</span>
+                </div>
+                <div class="row" style="gap: 8px">
+                    <button type="button" id="reloadBtn">刷新</button>
+                    <a href="/ttml/" class="hint">去上传页</a>
+                </div>
+            </div>
+            <div class="hint" id="info" style="margin-top: 10px">加载中…</div>
+        </section>
+
+        <section class="block" id="listBox" hidden>
+            <div id="list"></div>
+        </section>
+
+        <section class="block" id="legacyBox" hidden>
+            <div class="hint" style="margin-bottom: 10px">老格式（<code>ttml/&lt;歌曲id&gt;.ttml</code>，一个 id 一份，没有 ttmlId 概念）</div>
+            <div id="legacy"></div>
+        </section>
+    </main>
+
+    <script>
+        (function () {
+            'use strict';
+            var PASS_KEY = 'bmusic.fileProxy.pass';
+            var $ = function (id) { return document.getElementById(id); };
+            var info = $('info');
+            var pending = null;   // 两步确认：记住要点哪个
+
+            function pass() { try { return localStorage.getItem(PASS_KEY) || ''; } catch (e) { return ''; } }
+            function say(t, kind) {
+                info.textContent = t;
+                info.className = 'hint' + (kind ? ' ' + kind : '');
+            }
+            function fmtSize(n) {
+                if (!n && n !== 0) return '—';
+                if (n < 1024) return n + ' B';
+                if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+                return (n / 1024 / 1024).toFixed(2) + ' MB';
+            }
+            function fmtTime(s) {
+                if (!s) return '—';
+                var d = new Date(s);
+                if (isNaN(d.getTime())) return s;
+                var p = function (x) { return String(x).padStart(2, '0'); };
+                return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+                    ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+            }
+
+            /** 带通行证的请求 */
+            function api(url, opts) {
+                opts = opts || {};
+                var p = pass();
+                var full = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'pass=' + encodeURIComponent(p);
+                return fetch(full, opts).then(function (r) {
+                    return r.json().then(function (j) { return { status: r.status, data: j }; });
+                });
+            }
+
+            function needVerify(r) {
+                if (r.status === 403 && r.data && r.data.needVerify) {
+                    say('需要先完成人机验证：去 /ttml/ 页面过一下（12 小时内有效），然后回来刷新。', 'err');
+                    return true;
+                }
+                return false;
+            }
+
+            function chip(id) {
+                var s = document.createElement('span');
+                s.className = 'chip';
+                s.textContent = id;
+                return s;
+            }
+
+            function renderList(items) {
+                var box = $('list');
+                box.innerHTML = '';
+                if (!items.length) {
+                    box.innerHTML = '<div class="hint">还没有任何 TTML。</div>';
+                    return;
+                }
+                items.forEach(function (it) {
+                    var el = document.createElement('div');
+                    el.className = 'item';
+
+                    var top = document.createElement('div');
+                    top.className = 'top';
+
+                    var left = document.createElement('div');
+                    var tid = document.createElement('div');
+                    tid.className = 'tid';
+                    tid.textContent = it.ttmlId;
+                    left.appendChild(tid);
+                    var meta = document.createElement('div');
+                    meta.className = 'meta';
+                    meta.textContent = fmtSize(it.size) + ' · ' + fmtTime(it.uploadedAt) +
+                        ' · 绑定 ' + it.count + ' 个 id' + (it.orphan ? ' · 内容已丢失' : '');
+                    left.appendChild(meta);
+                    top.appendChild(left);
+
+                    var acts = document.createElement('div');
+                    acts.className = 'row';
+                    acts.style.gap = '8px';
+                    if (it.api) {
+                        var a = document.createElement('a');
+                        a.className = 'hint';
+                        a.href = it.url;
+                        a.target = '_blank';
+                        a.rel = 'noopener';
+                        a.textContent = '下载';
+                        acts.appendChild(a);
+                    }
+                    var del = document.createElement('button');
+                    del.type = 'button';
+                    del.className = 'danger';
+                    del.textContent = '删除这份';
+                    del.addEventListener('click', function () {
+                        var key = 'del:' + it.ttmlId;
+                        if (pending !== key) {
+                            pending = key;
+                            del.textContent = '再点一次：真删除';
+                            say('确认删除 ttmlId=' + it.ttmlId + '？内容会从 Blob 真删掉，' +
+                                (it.count ? it.count + ' 个歌曲 id 会自动解绑。' : '当前没有绑定。'));
+                            return;
+                        }
+                        pending = null;
+                        doDestroy(it.ttmlId, del);
+                    });
+                    acts.appendChild(del);
+                    top.appendChild(acts);
+
+                    el.appendChild(top);
+
+                    var ids = document.createElement('div');
+                    ids.className = 'ids';
+                    if (it.ids.length) {
+                        it.ids.forEach(function (id) { ids.appendChild(chip(id)); });
+                    } else {
+                        var none = document.createElement('span');
+                        none.className = 'noids';
+                        none.textContent = '没有 id 绑定着它';
+                        ids.appendChild(none);
+                    }
+                    el.appendChild(ids);
+
+                    box.appendChild(el);
+                });
+            }
+
+            function renderLegacy(list) {
+                var box = $('legacy');
+                box.innerHTML = '';
+                list.forEach(function (it) {
+                    var el = document.createElement('div');
+                    el.className = 'item';
+                    var top = document.createElement('div');
+                    top.className = 'top';
+                    var left = document.createElement('div');
+                    var t = document.createElement('div');
+                    t.className = 'tid';
+                    t.textContent = '歌曲 id ' + it.songId;
+                    left.appendChild(t);
+                    var m = document.createElement('div');
+                    m.className = 'meta';
+                    m.textContent = fmtSize(it.size) + ' · ' + fmtTime(it.uploadedAt);
+                    left.appendChild(m);
+                    top.appendChild(left);
+                    var a = document.createElement('a');
+                    a.className = 'hint';
+                    a.href = it.url;
+                    a.target = '_blank';
+                    a.rel = 'noopener';
+                    a.textContent = '下载';
+                    top.appendChild(a);
+                    el.appendChild(top);
+                    box.appendChild(el);
+                });
+            }
+
+            function doDestroy(ttmlId, btn) {
+                btn.disabled = true;
+                say('删除中…');
+                api('/ttml/destroy', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ ttmlId: ttmlId }),
+                })
+                    .then(function (r) {
+                        btn.disabled = false;
+                        if (needVerify(r)) return;
+                        if (r.data && r.data.code === 200) {
+                            say(r.data.msg, 'ok');
+                            load();
+                        } else {
+                            say((r.data && r.data.msg) || ('HTTP ' + r.status), 'err');
+                        }
+                    })
+                    .catch(function (e) {
+                        btn.disabled = false;
+                        say('删除失败：' + (e && e.message ? e.message : e), 'err');
+                    });
+            }
+
+            function load() {
+                say('加载中…');
+                api('/ttml/admin')
+                    .then(function (r) {
+                        if (needVerify(r)) return;
+                        if (!r.data || r.data.code !== 200) {
+                            say((r.data && r.data.msg) || ('HTTP ' + r.status), 'err');
+                            return;
+                        }
+                        $('nTotal').textContent = r.data.total;
+                        $('nBind').textContent = r.data.bindingCount;
+                        $('nLegacy').textContent = r.data.legacyCount || 0;
+                        renderList(r.data.items || []);
+                        $('listBox').hidden = false;
+                        var lg = r.data.legacy || [];
+                        if (lg.length) {
+                            renderLegacy(lg);
+                            $('legacyBox').hidden = false;
+                        } else {
+                            $('legacyBox').hidden = true;
+                        }
+                        say('共 ' + r.data.total + ' 份 TTML、' + r.data.bindingCount + ' 条绑定。', 'ok');
+                    })
+                    .catch(function (e) {
+                        say('加载失败：' + (e && e.message ? e.message : e), 'err');
+                    });
+            }
+
+            $('reloadBtn').addEventListener('click', load);
+            if (!pass()) {
+                say('本地没有人机验证通行证：先去 /ttml/ 页面过一下验证（12 小时内有效），再回来刷新。', 'err');
+            } else {
+                load();
+            }
+        })();
+    </script>
+</body>
+</html>

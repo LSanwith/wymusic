@@ -249,6 +249,26 @@ module.exports = async (query, request) => {
     }
   }
 
+  // 歌曲 id 为准：它已经绑在别的 TTML 上就不允许直接改绑，必须先解绑
+  if (put.blocked) {
+    return {
+      status: 409,
+      body: {
+        code: 409,
+        ok: false,
+        msg:
+          '这些歌曲 id 已经绑在别的 TTML 上了，不能直接改绑：' +
+          put.conflicts.map((c) => `${c.id} → ttmlId=${c.boundTo}`).join('、'),
+        conflicts: put.conflicts,
+        hint:
+          '一个歌曲 id 同一时间只能绑一份歌词。要换成这份，先到 /ttml/admin/ ' +
+          '把这个 id 从旧的那份上解绑，再提交。',
+        alreadyBound: put.already,
+        ttmlId: put.ttmlId,
+      },
+    }
+  }
+
   // 这份歌词现在一共绑了哪些歌曲 id（用请求里的 + 已查到的，避免 list 的延迟漏掉刚建的）
   const boundIds = [
     ...new Set([...(await store.bindingsOfTtml(put.ttmlId)), ...ids]),
@@ -264,8 +284,6 @@ module.exports = async (query, request) => {
       ids,
       bound: put.bound,
       alreadyBound: put.already,
-      rebound: put.rebound,
-      reboundFrom: put.prev,
       // 这份 TTML 目前绑定的全部歌曲 id
       bindings: boundIds,
       saved: ids.map((id) => ({
