@@ -277,6 +277,12 @@
                 <a class="hint" href="/ttml/preview/" style="margin:0">歌词预览 →</a>
                 <a class="hint" href="/ttml/demo/" style="margin:0">接口演示 →</a>
             </div>
+
+            <div class="row" style="margin-top:12px">
+                <input type="text" id="delIds" placeholder="要删除的歌曲 id，可多个" style="flex:0 1 260px">
+                <button type="button" id="delBtn">删除已上传的 TTML</button>
+                <span class="hint" id="delInfo" style="margin:0">删掉就没了，会先让你过一遍人机验证</span>
+            </div>
         </section>
 
         <section class="block">
@@ -524,6 +530,54 @@
                     // 通行证也可以走 body，这里放 query 由 api() 拼上去
                     body: JSON.stringify({ ttml: ttml, ids: ids }),
                 });
+            }
+
+            /* ---------- 删除已上传的 TTML（两步确认，和 /file/ 一致） ---------- */
+            var pendingDel = null;
+            function resetDelBtn() {
+                pendingDel = null;
+                $('delBtn').textContent = '删除已上传的 TTML';
+            }
+            $('delIds').addEventListener('input', resetDelBtn);
+            $('delBtn').addEventListener('click', function () {
+                var raw = $('delIds').value.replace(/[^\d,，、\s]/g, '').trim();
+                if (!raw) {
+                    $('delInfo').textContent = '先填要删的歌曲 id。';
+                    return;
+                }
+                if (pendingDel !== raw) {
+                    pendingDel = raw;
+                    this.textContent = '再点一次确认删除';
+                    $('delInfo').textContent = '确认删除这些 id 的 TTML？删掉就没了：' + raw;
+                    return;
+                }
+                resetDelBtn();
+                doDelete(raw, this);
+            });
+
+            function doDelete(ids, btn) {
+                btn.disabled = true;
+                $('delInfo').textContent = '删除中…';
+                api('/ttml/delete', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ ids: ids }),
+                })
+                    .then(function (r) {
+                        if (r.data && r.data.needVerify) {
+                            clearPass();
+                            pendingSubmit = function () { doDelete(ids, btn); };
+                            showGate('先完成人机验证，通过后会自动继续删除');
+                            $('delInfo').textContent = '需要先完成人机验证。';
+                            return;
+                        }
+                        btn.disabled = false;
+                        $('delInfo').textContent = (r.data && r.data.msg) || ('HTTP ' + r.status);
+                    })
+                    .catch(function (e) {
+                        btn.disabled = false;
+                        $('delInfo').textContent = '删除失败：' + (e && e.message ? e.message : e);
+                    });
             }
 
             /* ---------- 人机验证（与 /file/ 共用同一个通行证） ---------- */

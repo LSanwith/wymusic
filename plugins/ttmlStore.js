@@ -67,6 +67,15 @@ async function stat(id) {
   return { url: meta.url, size: meta.size, uploadedAt: meta.uploadedAt }
 }
 
+/** 删除某个 id 的 TTML。返回 true 表示确实删掉了一份 */
+async function remove(id) {
+  const { del } = require('@vercel/blob')
+  const meta = await stat(id)
+  if (!meta) return false
+  await del(meta.url)
+  return true
+}
+
 /**
  * 对外展示的下载地址：走本站域名，不把 Blob 的随机子域暴露出去。
  * 域名可用 PUBLIC_BASE_URL 覆盖，默认就是站点本身。
@@ -86,5 +95,6 @@ module.exports = {
   save,
   load,
   stat,
+  remove,
   downloadUrl,
 }

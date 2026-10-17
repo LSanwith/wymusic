@@ -133,6 +133,17 @@ function normalizeTtmlInput(raw) {
       .replace(/&amp;/g, '&')
   }
 
+  // 4) 前面还挂着别的包装就直接截出来。
+  //    常见的是把 JSON 里的一整行原样粘进来：
+  //      "ttmlLocalizations": "<tt xmlns=...>...</tt>"
+  //    反斜杠解开之后这行就变成合法的 XML，但前后的 "键名": " 还在，
+  //    直接喂给解析器仍然会失败，所以按 <tt ...</tt> 截一段。
+  const start = s.search(/<tt[\s>]/i)
+  if (start > 0) {
+    const end = s.lastIndexOf('</tt>')
+    if (end > start) s = s.slice(start, end + 5).trim()
+  }
+
   return s
 }
 

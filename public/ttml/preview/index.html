@@ -345,6 +345,14 @@
                     .replace(/&amp;/g, '&')
             }
 
+            // 前面还挂着包装就直接截出来（比如粘的是 JSON 里的
+            //   "ttmlLocalizations": "<tt ...></tt>"  这一整行）
+            const start = s.search(/<tt[\s>]/i)
+            if (start > 0) {
+                const end = s.lastIndexOf('</tt>')
+                if (end > start) s = s.slice(start, end + 5).trim()
+            }
+
             return s
         }
 
