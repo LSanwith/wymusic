@@ -202,8 +202,7 @@
                 <input type="text" id="songId" inputmode="numeric" maxlength="20" placeholder="网易云歌曲 id，例如 186016">
                 <button type="button" id="fetchBtn">获取 TTML</button>
                 <button type="button" id="appleBtn" title="返回 Apple Music 的 data[].attributes.ttmlLocalizations 结构">取 Apple 格式</button>
-                <button type="button" id="rawBtn" title="302 跳到 Blob 原文；application/ttml+xml 浏览器会存盘">下载 TTML 文件</button>
-            </div>
+                <button type="button" id="rawBtn" title="302 跳到 Blob 原文；application/ttml+xml 浏览器会存盘">下载 TTML 文件</button>            </div>
             <div class="hint" id="info">先到 <a href="/ttml/">上传页</a> 传一份，再回来试。</div>
         </section>
 
@@ -230,9 +229,9 @@ if (data.code === 200) console.log(data.ttml);
 //      }]
 //    }
 
-// 3) 想要 TTML 文件本体（正确的 MIME），加 raw=1，会 302 到 Blob
-//    /search?ttml=186016&amp;raw=1
-//    注意：application/ttml+xml 浏览器没有渲染器，会直接存盘
+// 3) 返回里的 url 是本站域名的下载地址：https://www.sanwith.cc.cd/ttml/file?id=186016
+//    打开会 302 到 Blob 原文；application/ttml+xml 浏览器没有渲染器，会直接存盘
+//    （不直接暴露 Blob 的随机子域）
 
 // 返回码
 //   200  成功     400  ttml 参数不是纯数字
@@ -496,7 +495,7 @@ if (data.code === 200) console.log(data.ttml);
             $('rawBtn').addEventListener('click', function () {
                 var id = readId();
                 if (!id) { say('先填一个歌曲 id。', 'err'); return; }
-                window.open('/search?ttml=' + id + '&raw=1', '_blank', 'noopener');
+                window.open('/ttml/file?id=' + id, '_blank', 'noopener');
             });
 
             playBtn.addEventListener('click', function () {

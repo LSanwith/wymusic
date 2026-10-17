@@ -101,7 +101,9 @@ async function readTtml(query) {
       code: 200,
       id,
       ttml: hit.ttml,
-      url: hit.url,
+      // 对外给本站域名的下载地址；blobUrl 留着方便排查
+      url: ttmlStore.downloadUrl(id),
+      blobUrl: hit.url,
       size: hit.size,
       uploadedAt: hit.uploadedAt,
     },

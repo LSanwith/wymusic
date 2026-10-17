@@ -54,4 +54,37 @@ async function load(id) {
   }
 }
 
-module.exports = { PREFIX, keyOf, isValidId, hasToken, save, load }
+/** 只查元信息（不下载内容），做下载跳转时用 */
+async function stat(id) {
+  const { head } = require('@vercel/blob')
+  let meta
+  try {
+    meta = await head(keyOf(id))
+  } catch {
+    return null
+  }
+  if (!meta || !meta.url) return null
+  return { url: meta.url, size: meta.size, uploadedAt: meta.uploadedAt }
+}
+
+/**
+ * 对外展示的下载地址：走本站域名，不把 Blob 的随机子域暴露出去。
+ * 域名可用 PUBLIC_BASE_URL 覆盖，默认就是站点本身。
+ */
+function downloadUrl(id) {
+  const base = String(
+    process.env.PUBLIC_BASE_URL || 'https://www.sanwith.cc.cd',
+  ).replace(/\/+$/, '')
+  return `${base}/ttml/file?id=${encodeURIComponent(String(id))}`
+}
+
+module.exports = {
+  PREFIX,
+  keyOf,
+  isValidId,
+  hasToken,
+  save,
+  load,
+  stat,
+  downloadUrl,
+}
