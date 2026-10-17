@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <link rel="icon" href="/docs/netease.png">
+    <title>TTML 歌词上传 · Sanwith</title>
+    <link rel="stylesheet" href="/nav.css">
+    <style>
+        :root {
+            --fg: #ffffff;
+            --muted: rgba(255, 255, 255, 0.7);
+            --card-bg: rgba(255, 255, 255, 0.09);
+            --card-border: rgba(255, 255, 255, 0.15);
+            --btn-bg: rgba(255, 255, 255, 0.12);
+            --ok: #7ee2a8;
+            --err: #ff9c9c;
+        }
+        * { box-sizing: border-box; }
+        html { scrollbar-width: none; -ms-overflow-style: none; }
+        html::-webkit-scrollbar { display: none; }
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: var(--fg);
+            background: #0a0a0c;
+            line-height: 1.6;
+            position: relative;
+            overflow-x: hidden;
+        }
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            pointer-events: none;
+            background-image: url('/bg.jpg');
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+        }
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.6);
+        }
+        .container {
+            max-width: 960px;
+            margin: 32px auto 60px;
+            padding: 0 20px;
+            position: relative;
+            z-index: 1;
+        }
+        header.site-header { margin-bottom: 22px; user-select: none; }
+        header.site-header h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin: 0;
+            text-shadow: 0 0 30px rgba(255, 255, 255, 0.2);
+        }
+        header.site-header .sub { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+
+        .block {
+            position: relative;
+            background: var(--card-bg);
+            backdrop-filter: blur(2px);
+            -webkit-backdrop-filter: blur(2px);
+            border: 1px solid var(--card-border);
+            border-radius: 14px;
+            padding: 22px 24px;
+            margin-bottom: 18px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+            transition: box-shadow 0.3s, border-color 0.3s;
+        }
+        .block:hover {
+            border-color: rgba(255, 255, 255, 0.25);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+        }
+        .block h2 {
+            margin: 0 0 14px;
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+        .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+        input[type="text"], input[type="file"], textarea {
+            flex: 1 1 260px;
+            min-width: 0;
+            padding: 10px 12px;
+            font-size: 14px;
+            font-family: inherit;
+            color: var(--fg);
+            background: rgba(0, 0, 0, 0.28);
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            outline: none;
+        }
+        textarea {
+            width: 100%;
+            min-height: 200px;
+            resize: vertical;
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+            font-size: 12.5px;
+            line-height: 1.5;
+            flex: none;
+        }
+        input[type="file"] { padding: 8px 10px; flex: 0 1 auto; }
+        input:focus, textarea:focus { border-color: rgba(255, 255, 255, 0.45); }
+        input::placeholder, textarea::placeholder { color: rgba(255, 255, 255, 0.35); }
+
+        button {
+            padding: 10px 18px;
+            font-size: 14px;
+            font-family: inherit;
+            color: var(--fg);
+            background: var(--btn-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+        }
+        button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.2); }
+        button:disabled { opacity: 0.45; cursor: not-allowed; }
+        .hint { color: var(--muted); font-size: 13px; margin-top: 10px; }
+        .hint.ok { color: var(--ok); }
+        .hint.err { color: var(--err); }
+
+        .label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+        .label:first-child { margin-top: 0; }
+
+        /* 歌曲 id 列表：每个空只放一个 id */
+        #idList { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+        .id-row { display: flex; gap: 8px; align-items: center; }
+        .id-row .idx {
+            flex: 0 0 26px;
+            text-align: center;
+            color: var(--muted);
+            font-size: 12px;
+        }
+        .id-row input { flex: 1 1 auto; }
+        .id-row .del {
+            flex: 0 0 auto;
+            padding: 8px 12px;
+            line-height: 1;
+        }
+        .id-row .del:hover:not(:disabled) { color: var(--err); }
+
+        pre.json {
+            margin: 12px 0 0;
+            padding: 12px 14px;
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            font-size: 12.5px;
+            line-height: 1.5;
+            max-height: 380px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            user-select: text;
+        }
+        .url-item {
+            display: block;
+            margin-top: 6px;
+            font-size: 12.5px;
+            color: var(--muted);
+            word-break: break-all;
+            user-select: text;
+        }
+        .url-item b { color: var(--fg); font-weight: 500; }
+        a { color: #9ecbff; }
+
+        /* 人机验证遮罩（与 /file/ 同一套通行证，已通过就不用再过一遍） */
+        .verify-gate {
+            position: fixed;
+            inset: 0;
+            z-index: 50;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(10, 12, 18, 0.85);
+        }
+        .verify-gate[hidden] { display: none; }
+        .verify-box {
+            width: min(92vw, 400px);
+            padding: 24px 22px;
+            text-align: center;
+            background: rgba(28, 30, 38, 0.97);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 14px;
+        }
+        .verify-box h2 { margin: 0 0 10px; font-size: 17px; }
+        .verify-box #turnstileBox { margin-top: 14px; min-height: 65px; }
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-list">
+            <a href="/">音乐界面</a>
+            <a href="/file/">文件挂载代理</a>
+            <a href="/ttml/" class="active">TTML 歌词</a>
+        </div>
+        <span class="nav-brand">
+            <a href="https://github.com/neteasecloudmusicapienhanced/api-enhanced" target="_blank" rel="noopener">GitHub</a>
+            <span class="footer-sep">|</span>
+            <a href="https://qm.qq.com/q/eetuZkIV20" target="_blank" rel="noopener">添加管理员QQ</a>
+        </span>
+    </nav>
+
+    <main class="container">
+        <header class="site-header">
+            <h1>TTML 歌词上传</h1>
+            <p class="sub">上传歌词 · AI 审核 · 通过后可直接按歌曲 id 读取</p>
+        </header>
+
+        <div id="notice" class="block" hidden>
+            <div class="hint" id="noticeText"></div>
+        </div>
+
+        <section class="block">
+            <h2>上传 TTML</h2>
+
+            <span class="label">TTML 歌词内容（必填）</span>
+            <div class="row" style="margin-bottom:8px">
+                <input type="file" id="ttmlFile" accept=".ttml,.xml,text/xml,application/xml">
+                <span class="hint" style="margin:0">也可以直接选一个 .ttml 文件，内容会填进下面</span>
+            </div>
+            <textarea id="ttmlText" placeholder="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;&#10;&lt;tt xmlns=&quot;http://www.w3.org/ns/ttml&quot;&gt; ... &lt;/tt&gt;"></textarea>
+
+            <span class="label">对应的网易云歌曲 id（必填，可多个，每个空只填一个）</span>
+            <div id="idList"></div>
+            <div class="row" style="margin-top:10px">
+                <button type="button" id="addId">+ 添加一个 id</button>
+            </div>
+
+            <div class="hint">
+                这两项都是必填。提交后先做本地结构检查，再交 AI 判断「歌词是否真属于这些歌」，
+                两道都通过才会入库。入库后可以按 id 读取：<code>/search?ttml=&lt;id&gt;</code>
+            </div>
+
+            <div class="row" style="margin-top:14px">
+                <button type="button" id="submitBtn">提交审核</button>
+                <a class="hint" href="/ttml/demo/" style="margin:0">先看看接口怎么用 →</a>
+            </div>
+        </section>
+
+        <section class="block">
+            <h2>结果</h2>
+            <div class="hint" id="resultInfo">还没有提交。</div>
+            <div id="resultBody"></div>
+        </section>
+    </main>
+
+    <!-- 人机验证遮罩：只在服务端开了验证、且本机没有有效通行证时出现 -->
+    <div id="verifyGate" class="verify-gate" hidden>
+        <div class="verify-box">
+            <h2>人机验证</h2>
+            <p class="hint" id="verifyHint">正在加载验证组件…</p>
+            <div id="turnstileBox"></div>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            'use strict';
+
+            var PASS_STORE = 'bmusic.fileProxy.pass';
+            var TURNSTILE_SRC =
+                'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+
+            var $ = function (id) { return document.getElementById(id); };
+            var idList = $('idList');
+            var ttmlText = $('ttmlText');
+            var resultInfo = $('resultInfo');
+            var resultBody = $('resultBody');
+
+            var verifyOn = false;
+            var siteKey = '';
+            var widgetId = null;
+            var pendingSubmit = null;
+
+            /* ---------- 通行证 ---------- */
+            function getPass() {
+                try { return localStorage.getItem(PASS_STORE) || ''; } catch (e) { return ''; }
+            }
+            function setPass(v) {
+                try { localStorage.setItem(PASS_STORE, v); } catch (e) { /* 隐私模式忽略 */ }
+            }
+            function clearPass() {
+                try { localStorage.removeItem(PASS_STORE); } catch (e) { /* 忽略 */ }
+            }
+
+            function api(path, opts) {
+                var p = getPass();
+                if (verifyOn && p) {
+                    path += (path.indexOf('?') >= 0 ? '&' : '?') + 'pass=' + encodeURIComponent(p);
+                }
+                return fetch(path, opts).then(function (r) {
+                    return r.json().catch(function () { return {}; }).then(function (j) {
+                        return { ok: r.ok, status: r.status, data: j };
+                    });
+                });
+            }
+
+            /* ---------- 歌曲 id 行 ---------- */
+            function addIdRow(value) {
+                var row = document.createElement('div');
+                row.className = 'id-row';
+                row.innerHTML = '<span class="idx"></span>' +
+                    '<input type="text" inputmode="numeric" maxlength="20" placeholder="例如 186016">' +
+                    '<button type="button" class="del" title="删除这一行">×</button>';
+                var input = row.querySelector('input');
+                input.value = value || '';
+                // 每个空只能填一个 id：非数字直接剔掉
+                input.addEventListener('input', function () {
+                    var v = this.value.replace(/\D/g, '').slice(0, 20);
+                    if (v !== this.value) this.value = v;
+                });
+                row.querySelector('.del').addEventListener('click', function () {
+                    row.remove();
+                    renumber();
+                    ensureOneRow();
+                });
+                idList.appendChild(row);
+                renumber();
+                return input;
+            }
+            function renumber() {
+                var rows = idList.querySelectorAll('.id-row .idx');
+                for (var i = 0; i < rows.length; i++) rows[i].textContent = '#' + (i + 1);
+            }
+            function ensureOneRow() {
+                if (!idList.querySelector('.id-row')) addIdRow('');
+            }
+            function collectIds() {
+                var out = [];
+                var inputs = idList.querySelectorAll('.id-row input');
+                for (var i = 0; i < inputs.length; i++) {
+                    var v = inputs[i].value.trim();
+                    if (v) out.push(v);
+                }
+                // 去重
+                return out.filter(function (v, i) { return out.indexOf(v) === i; });
+            }
+
+            $('addId').addEventListener('click', function () {
+                if (idList.querySelectorAll('.id-row').length >= 8) {
+                    setResult('一次最多 8 个 id。', 'err');
+                    return;
+                }
+                addIdRow('').focus();
+            });
+
+            /* ---------- 选文件填进 textarea ---------- */
+            $('ttmlFile').addEventListener('change', function () {
+                var f = this.files && this.files[0];
+                if (!f) return;
+                var reader = new FileReader();
+                reader.onload = function () {
+                    ttmlText.value = String(reader.result || '');
+                    setResult('已读入 ' + f.name + '（' + ttmlText.value.length + ' 字符）', 'ok');
+                };
+                reader.onerror = function () { setResult('读文件失败', 'err'); };
+                reader.readAsText(f, 'utf-8');
+            });
+
+            /* ---------- 结果展示 ---------- */
+            function setResult(text, kind) {
+                resultInfo.textContent = text;
+                resultInfo.className = 'hint' + (kind ? ' ' + kind : '');
+            }
+            function showJson(obj) {
+                resultBody.innerHTML = '';
+                var pre = document.createElement('pre');
+                pre.className = 'json';
+                pre.textContent = JSON.stringify(obj, null, 2);
+                resultBody.appendChild(pre);
+            }
+
+            /* ---------- 提交 ---------- */
+            $('submitBtn').addEventListener('click', function () {
+                var btn = this;
+                btn.disabled = true;
+                doSubmit();
+            });
+
+            function doSubmit() {
+                var btn = $('submitBtn');
+                var ttml = ttmlText.value;
+                var ids = collectIds();
+                if (!ttml.trim()) { btn.disabled = false; setResult('TTML 歌词不能为空。', 'err'); return; }
+                if (!ids.length) { btn.disabled = false; setResult('至少要填一个网易云歌曲 id。', 'err'); return; }
+
+                btn.disabled = true;
+                setResult('提交中：先做结构检查，再交 AI 审核（可能要十几秒）…', '');
+                resultBody.innerHTML = '';
+
+                submitOnce(ttml, ids)
+                    .then(function (r) {
+                        // 通行证缺失/过期：清掉本地的、弹验证，通过后自动重交
+                        if (r.data && r.data.needVerify) {
+                            clearPass();
+                            pendingSubmit = function () { doSubmit(); };
+                            showGate('先完成人机验证，通过后会自动继续提交');
+                            setResult('需要先完成人机验证。', '');
+                            return;
+                        }
+                        btn.disabled = false;
+                        if (r.status === 200 && r.data.ok) {
+                            setResult('已通过审核并入库。', 'ok');
+                            showJson(r.data);
+                            return;
+                        }
+                        setResult((r.data && r.data.msg) || ('提交失败 HTTP ' + r.status), 'err');
+                        showJson(r.data);
+                    })
+                    .catch(function (e) {
+                        btn.disabled = false;
+                        setResult('请求失败：' + (e && e.message ? e.message : e), 'err');
+                    });
+            }
+
+            function submitOnce(ttml, ids) {
+                return api('/ttml/submit', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    // 通行证也可以走 body，这里放 query 由 api() 拼上去
+                    body: JSON.stringify({ ttml: ttml, ids: ids }),
+                });
+            }
+
+            /* ---------- 人机验证（与 /file/ 共用同一个通行证） ---------- */
+            function setHint(t) { var h = $('verifyHint'); if (h) h.textContent = t; }
+
+            function loadTurnstile() {
+                if (window.turnstile) return Promise.resolve();
+                return new Promise(function (resolve, reject) {
+                    var s = document.createElement('script');
+                    s.src = TURNSTILE_SRC;
+                    s.async = true;
+                    s.defer = true;
+                    s.onload = function () { resolve(); };
+                    s.onerror = function () { reject(new Error('脚本加载失败')); };
+                    document.head.appendChild(s);
+                });
+            }
+
+            function showGate(msg) {
+                $('verifyGate').hidden = false;
+                if (!siteKey) {
+                    setHint('服务端启用了人机验证，但没有配置 TURNSTILE_SITE_KEY。');
+                    return;
+                }
+                setHint(msg || '请完成下面的验证');
+                if (widgetId !== null) {
+                    if (window.turnstile) turnstile.reset(widgetId);
+                    return;
+                }
+                loadTurnstile().then(function () {
+                    widgetId = turnstile.render('#turnstileBox', {
+                        sitekey: siteKey,
+                        language: 'zh-cn',
+                        theme: 'dark',
+                        callback: onToken,
+                        'error-callback': function () { setHint('验证组件报错，请刷新重试'); },
+                    });
+                }).catch(function () {
+                    setHint('无法加载验证组件（challenges.cloudflare.com 不可达），请检查网络后刷新。');
+                });
+            }
+
+            function onToken(token) {
+                setHint('正在校验…');
+                fetch('/file/verify?token=' + encodeURIComponent(token) + '&_=' + Date.now())
+                    .then(function (r) { return r.json(); })
+                    .then(function (j) {
+                        if (!j || !j.pass) {
+                            setHint((j && j.msg) || '验证失败，请重试');
+                            if (window.turnstile && widgetId !== null) turnstile.reset(widgetId);
+                            return;
+                        }
+                        setPass(j.pass);
+                        $('verifyGate').hidden = true;
+                        if (pendingSubmit) {
+                            var p = pendingSubmit;
+                            pendingSubmit = null;
+                            p();
+                        }
+                    })
+                    .catch(function (e) { setHint('校验请求失败：' + (e && e.message ? e.message : e)); });
+            }
+
+            /* ---------- 启动 ---------- */
+            (function boot() {
+                addIdRow('');
+                fetch('/file/verify?_=' + Date.now())
+                    .then(function (r) { return r.json(); })
+                    .then(function (j) {
+                        verifyOn = !!(j && j.enabled);
+                        siteKey = (j && j.siteKey) || '';
+                        // 本机已有通行证就不用再过一遍；过期了提交时会 403 再弹
+                        if (verifyOn && !getPass()) showGate();
+                    })
+                    .catch(function () { /* 拿不到配置就按不启用处理 */ });
+            })();
+        })();
+    </script>
+</body>
+</html>
