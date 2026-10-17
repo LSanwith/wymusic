@@ -278,6 +278,8 @@
         let playing = false
         let raf = 0
         let lastTs = 0
+        // 当前歌词自己的身份（内容哈希）。一份 TTML 可以绑多个歌曲 id，这个值不变
+        let currentTtmlId = ''
 
         function say(text, kind) {
             loadInfo.textContent = text
@@ -457,7 +459,9 @@
             player.setCurrentTime(0)
             player.update(16)
 
-            metaBox.innerHTML = metaText(parsed.metadata)
+            metaBox.innerHTML = [metaText(parsed.metadata), currentTtmlId ? '<b>ttmlId</b> ' + currentTtmlId : '']
+                .filter(Boolean)
+                .join(' · ')
             say('已加载 ' + lines.length + ' 行，总长 ' + fmt(duration).slice(3) + '，点播放开始预览。', 'ok')
             return lines.length
         }
@@ -530,6 +534,7 @@
                     say((j.msg || '读取失败') + '（HTTP ' + j.code + '）', 'err')
                     return
                 }
+                currentTtmlId = j.ttmlId || ''
                 render(j.ttml)
             } catch (e) {
                 say('请求失败：' + (e && e.message ? e.message : e), 'err')
@@ -563,6 +568,7 @@
 
         function useTtml(text, label) {
             try {
+                currentTtmlId = ''
                 const n = render(text)
                 if (n) say(label + '：解析出 ' + n + ' 行。', 'ok')
             } catch (e) {

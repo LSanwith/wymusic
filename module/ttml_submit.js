@@ -207,12 +207,11 @@ module.exports = async (query, request) => {
     }
   }
 
-  // 4) 查重：这个 id 已经存过的 TTML 和这次要提交的完全一样，就是重复提交
-  //    比较的是「归一化 + 压掉空白」后的整份内容，所以只是改了时间轴/文字仍然算更新，
-  //    不会被误判成重复。
-  const canon = (s) => review.normalizeTtmlInput(s).replace(/\s+/g, ' ').trim()
-  const incoming = canon(ttml)
-  const duplicated = []
+  // 4) 查重：全部 id 都已经绑着同一份内容，才是纯重复提交。
+  //    只要有 id 是新的（或者绑的是别的歌词），就该继续 ——
+  //    否则「给已上传的歌词再补一个歌曲 id」永远做不了。
+  const incomingId = store.ttmlIdOf(ttml)
+  const alreadyBound = []
   for (const id of ids) {
     let existing = null
     try {
@@ -220,34 +219,33 @@ module.exports = async (query, request) => {
     } catch {
       existing = null
     }
-    if (existing && canon(existing.ttml) === incoming) duplicated.push(id)
+    if (existing && existing.ttmlId === incomingId) alreadyBound.push(id)
   }
-  if (duplicated.length) {
+  if (alreadyBound.length === ids.length) {
     return {
       status: 409,
       body: {
         code: 409,
         ok: false,
         msg:
-          '这些 id 已经有完全相同的 TTML 了，属于重复提交：' +
-          duplicated.join(', '),
-        duplicated,
+          '这些 id 已经绑着同一份 TTML 了，属于重复提交：' +
+          ids.join(', ') +
+          `（ttmlId=${incomingId}）`,
+        ttmlId: incomingId,
+        duplicated: ids,
         hint: '内容没变就不用重复提交；要更新请改动内容后再提交。',
       },
     }
   }
 
-  // 5) 入 Blob
-  const saved = []
+  // 5) 入 Blob：内容只存一份（按内容 id 命名），再给每个歌曲 id 建绑定
+  let put
   try {
-    for (const id of ids) {
-      const r = await store.save(id, ttml)
-      saved.push({ id, url: r.url, api: '/search?ttml=' + id })
-    }
+    put = await store.save(ids, ttml)
   } catch (e) {
     return {
       status: 500,
-      body: { code: 500, msg: '写入失败：' + (e.message || e), saved },
+      body: { code: 500, msg: '写入失败：' + (e.message || e) },
     }
   }
 
@@ -256,8 +254,17 @@ module.exports = async (query, request) => {
     body: {
       code: 200,
       ok: true,
+      // 这份歌词自己的身份（内容哈希）。换歌曲 id 绑也不变，对外请求仍用歌曲 id
+      ttmlId: put.ttmlId,
       ids,
-      saved,
+      bound: put.bound,
+      alreadyBound: put.already,
+      rebound: put.rebound,
+      saved: ids.map((id) => ({
+        id,
+        api: '/search?ttml=' + id,
+        url: store.downloadUrl(id),
+      })),
       review: {
         verdict: '脚本审核通过',
         checks,

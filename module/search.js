@@ -100,6 +100,9 @@ async function readTtml(query) {
     body: {
       code: 200,
       id,
+      // 这份歌词自己的身份（内容哈希）。一份 TTML 可以绑多个歌曲 id，
+      // 绑到别的 id 上时 ttmlId 不变 —— 对外请求仍按歌曲 id
+      ttmlId: hit.ttmlId,
       ttml: hit.ttml,
       // 对外给本站域名的下载地址；blobUrl 留着方便排查
       url: ttmlStore.downloadUrl(id),
