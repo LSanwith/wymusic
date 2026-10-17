@@ -158,12 +158,18 @@ async function aiCheck(songs, digest) {
     album: s.album || '',
   }))
 
-  // 提示词尽量短：要求只回一行 JSON，并且 why 限 20 字
+  // 提示词尽量短，但「必须全部相符」这条不能省：
+  // 一个 TTML 可能挂多个 id（同曲不同版本 / 不同专辑），
+  // 只要有一个 id 的歌对不上就不该入库。
+  // 早先写法只说「判断是否属于给定歌曲」，模型会只核对其中一首就放行。
   const system =
-    '你是歌词审核员。判断歌词是否属于给定歌曲。只输出一行 JSON：' +
-    '{"ok":1或0,"why":"不超过20字的中文理由"}，不要任何其它文字。'
+    '你是歌词审核员。给定一组歌曲和一段歌词，判断这段歌词是否属于【每一首】。' +
+    '必须全部相符才通过；只要有一首对不上就不通过，并在理由里指出是哪首。' +
+    '只输出一行 JSON：{"ok":1或0,"why":"不超过20字的中文理由"}，不要任何其它文字。'
 
   const user = JSON.stringify({
+    songCount: picked.length,
+    mustMatchAll: true,
     songs: picked,
     lyric: {
       lines: digest.lineCount,

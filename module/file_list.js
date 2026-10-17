@@ -90,26 +90,32 @@ module.exports = async (query) => {
           used,
           left: used === null ? null : Math.max(0, PUB_MONTHLY_LIMIT - used),
         },
-        blobs: (result.blobs || []).map((b) => {
-          const retention = retentionOf(b.pathname, b.uploadedAt)
-          const base = String(b.pathname || '')
-            .split('/')
-            .pop()
-          return {
-            url: b.url,
-            // 让浏览器下载而不是内联打开（图片/音频用 url 会直接预览）
-            downloadUrl: b.downloadUrl || b.url,
-            // 本站短链接：分享出去比 blob.vercel-storage.com 那一长串好看
-            shareUrl: '/file/get?n=' + encodeURIComponent(base),
-            pathname: b.pathname,
-            size: b.size,
-            uploadedAt: b.uploadedAt,
-            contentType: b.contentType || '',
-            retention: retention.kind,
-            retentionLabel: retention.label,
-            expiresAt: retention.expiresAt || null,
-          }
-        }),
+        // 只列文件挂载自己的三个前缀。同一个 Blob store 里还存着
+        // TTML 歌词（ttml/<id>.ttml），不该出现在这个列表里。
+        blobs: (result.blobs || [])
+          .filter((b) =>
+            /^(tmp|keep-pub|keep-vip)\//.test(String(b.pathname || '')),
+          )
+          .map((b) => {
+            const retention = retentionOf(b.pathname, b.uploadedAt)
+            const base = String(b.pathname || '')
+              .split('/')
+              .pop()
+            return {
+              url: b.url,
+              // 让浏览器下载而不是内联打开（图片/音频用 url 会直接预览）
+              downloadUrl: b.downloadUrl || b.url,
+              // 本站短链接：分享出去比 blob.vercel-storage.com 那一长串好看
+              shareUrl: '/file/get?n=' + encodeURIComponent(base),
+              pathname: b.pathname,
+              size: b.size,
+              uploadedAt: b.uploadedAt,
+              contentType: b.contentType || '',
+              retention: retention.kind,
+              retentionLabel: retention.label,
+              expiresAt: retention.expiresAt || null,
+            }
+          }),
       },
     }
   } catch (e) {
