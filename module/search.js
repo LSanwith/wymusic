@@ -95,6 +95,17 @@ async function readTtml(query) {
     }
   }
 
+  // 同一份 TTML 还绑着哪些别的歌曲 id。
+  // 把自己也并进去再排除掉，这样即使 list 有延迟、暂时没列出自己，结果也是准的。
+  let siblings = []
+  try {
+    siblings = await ttmlStore.bindingsOfTtml(hit.ttmlId)
+  } catch {
+    siblings = []
+  }
+  const allIds = [...new Set([String(id), ...siblings.map(String)])]
+  const otherId = allIds.filter((x) => x !== String(id))
+
   return {
     status: 200,
     body: {
@@ -103,6 +114,8 @@ async function readTtml(query) {
       // 这份歌词自己的身份（内容哈希）。一份 TTML 可以绑多个歌曲 id，
       // 绑到别的 id 上时 ttmlId 不变 —— 对外请求仍按歌曲 id
       ttmlId: hit.ttmlId,
+      // 同一份 TTML 绑定的其它歌曲 id
+      otherId,
       ttml: hit.ttml,
       // 对外给本站域名的下载地址；blobUrl 留着方便排查
       url: ttmlStore.downloadUrl(id),
