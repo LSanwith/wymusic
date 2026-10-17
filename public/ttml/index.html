@@ -262,6 +262,8 @@
                 <li>有效歌词至少 8 行（最多 4000 行）</li>
                 <li>歌词跨度要覆盖歌曲时长的 50%~115%，太短算不完整</li>
                 <li>行内文本不能高度重复（同一句刷满全部行会被拒）</li>
+                <li><b>id 不能重复填</b>，重复的 id 直接判不通过</li>
+                <li>和已存的 TTML 完全相同的提交算重复提交，不予通过（内容没变就不用重提）</li>
                 <li><b>与这首歌的官方歌词字面重合率 ≥ 70%</b>，且<b>每个 id 都要各自满足</b></li>
                 <li>翻译、音译、Ruby 注音不参与比对（按 <code>ttm:role</code> / <code>tts:ruby</code> 识别），背景人声 <code>x-bg</code> 算正文</li>
                 <li>该曲必须有官方歌词 —— 纯音乐、暂无歌词一律拒绝</li>
@@ -370,14 +372,19 @@
                 if (!idList.querySelector('.id-row')) addIdRow('');
             }
             function collectIds() {
+                var out = collectIdsRaw();
+                // 去重
+                return out.filter(function (v, i) { return out.indexOf(v) === i; });
+            }
+            /** 原样收集（不去重），用来检测有没有重复填 */
+            function collectIdsRaw() {
                 var out = [];
                 var inputs = idList.querySelectorAll('.id-row input');
                 for (var i = 0; i < inputs.length; i++) {
                     var v = inputs[i].value.trim();
                     if (v) out.push(v);
                 }
-                // 去重
-                return out.filter(function (v, i) { return out.indexOf(v) === i; });
+                return out;
             }
 
             $('addId').addEventListener('click', function () {
@@ -466,9 +473,20 @@
             function doSubmit() {
                 var btn = $('submitBtn');
                 var ttml = ttmlText.value;
+                // 不去重：重复的 id 要在页面上就拦下来，别让服务端静默去重
+                var raw = collectIdsRaw();
                 var ids = collectIds();
                 if (!ttml.trim()) { btn.disabled = false; setResult('TTML 歌词不能为空。', 'err'); return; }
                 if (!ids.length) { btn.disabled = false; setResult('至少要填一个网易云歌曲 id。', 'err'); return; }
+                if (raw.length !== ids.length) {
+                    var dup = [];
+                    for (var i = 0; i < raw.length; i++) {
+                        if (raw.indexOf(raw[i]) !== i && dup.indexOf(raw[i]) < 0) dup.push(raw[i]);
+                    }
+                    btn.disabled = false;
+                    setResult('id 重复了：' + dup.join('、') + '（每个 id 只能填一次）', 'err');
+                    return;
+                }
 
                 btn.disabled = true;
                 setResult('提交中：脚本审核中（结构检查 + 官方歌词比对）…', '');

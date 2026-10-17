@@ -15,11 +15,25 @@ const store = require('../plugins/ttmlStore.js')
 const review = require('../plugins/ttmlReview.js')
 
 /** ids 既接受数组，也接受逗号/空白分隔的字符串 */
+/**
+ * 解析 id 列表。
+ * 重复的 id 不做静默去重 —— 原样报出来，让提交方自己改（重复填通常意味着填错了）。
+ */
 function parseIds(raw) {
-  const list = Array.isArray(raw)
-    ? raw
-    : String(raw == null ? '' : raw).split(/[\s,，、]+/)
-  return [...new Set(list.map((s) => String(s).trim()).filter(Boolean))]
+  const list = (
+    Array.isArray(raw)
+      ? raw
+      : String(raw == null ? '' : raw).split(/[\s,，、]+/)
+  )
+    .map((s) => String(s).trim())
+    .filter(Boolean)
+  const seen = new Set()
+  const dup = new Set()
+  for (const id of list) {
+    if (seen.has(id)) dup.add(id)
+    else seen.add(id)
+  }
+  return { ids: [...seen], duplicates: [...dup] }
 }
 
 /** 查歌曲详情，拿歌名/歌手/专辑/时长 */
@@ -72,11 +86,21 @@ module.exports = async (query, request) => {
     return { status: 400, body: { code: 400, msg: 'ttml 必填' } }
   }
 
-  const ids = parseIds(query.ids)
+  const { ids, duplicates } = parseIds(query.ids)
   if (!ids.length) {
     return {
       status: 400,
       body: { code: 400, msg: 'ids 必填：填这首歌对应的网易云 id' },
+    }
+  }
+  if (duplicates.length) {
+    return {
+      status: 400,
+      body: {
+        code: 400,
+        msg: 'id 重复了：' + duplicates.join(', ') + '（每个 id 只能填一次）',
+        duplicated: duplicates,
+      },
     }
   }
   if (ids.length > review.MAX_IDS) {
@@ -183,7 +207,37 @@ module.exports = async (query, request) => {
     }
   }
 
-  // 4) 入 Blob
+  // 4) 查重：这个 id 已经存过的 TTML 和这次要提交的完全一样，就是重复提交
+  //    比较的是「归一化 + 压掉空白」后的整份内容，所以只是改了时间轴/文字仍然算更新，
+  //    不会被误判成重复。
+  const canon = (s) => review.normalizeTtmlInput(s).replace(/\s+/g, ' ').trim()
+  const incoming = canon(ttml)
+  const duplicated = []
+  for (const id of ids) {
+    let existing = null
+    try {
+      existing = await store.load(id)
+    } catch {
+      existing = null
+    }
+    if (existing && canon(existing.ttml) === incoming) duplicated.push(id)
+  }
+  if (duplicated.length) {
+    return {
+      status: 409,
+      body: {
+        code: 409,
+        ok: false,
+        msg:
+          '这些 id 已经有完全相同的 TTML 了，属于重复提交：' +
+          duplicated.join(', '),
+        duplicated,
+        hint: '内容没变就不用重复提交；要更新请改动内容后再提交。',
+      },
+    }
+  }
+
+  // 5) 入 Blob
   const saved = []
   try {
     for (const id of ids) {
