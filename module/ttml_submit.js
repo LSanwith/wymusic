@@ -65,7 +65,9 @@ module.exports = async (query, request) => {
     }
   }
 
-  const ttml = String(query.ttml || '')
+  // 还原 JSON 转义 / HTML 实体：从接口返回的 JSON 里复制 ttml 字段值会带 \"
+  // 这种转义，直接存下来既过不了解析也没法用
+  const ttml = review.normalizeTtmlInput(query.ttml)
   if (!ttml.trim()) {
     return { status: 400, body: { code: 400, msg: 'ttml 必填' } }
   }

@@ -84,6 +84,58 @@ const NON_LYRIC_ROLE = /ttm:role\s*=\s*["']x-(?:translation|roman)["']/i
 // 非歌词内容：Ruby 注音（textContainer 包着 text，一起清掉；只留 base）
 const RUBY_TEXT = /tts:ruby\s*=\s*["']text(?:Container)?["']/i
 
+/**
+ * 把「从接口或网页里复制出来的」TTML 还原成真正的 XML。
+ *
+ * 两种很常见的污染：
+ *   1. JSON 转义：xmlns=\"...\"、整份挤成一行
+ *      —— 直接从接口返回的 JSON 里复制 ttml / ttmlLocalizations 字段值就是这样，
+ *         Apple Music 的接口返回的正是这种形态
+ *   2. HTML 实体：&lt;tt ...&gt;
+ *      —— 从网页的代码块里复制
+ *
+ * 不做还原的话，解析器会报 AttValue: " or ' expected（因为属性引号前面多了反斜杠）。
+ */
+function normalizeTtmlInput(raw) {
+  let s = String(raw == null ? '' : raw).trim()
+  if (!s) return s
+
+  // 1) 整段就是一个 JSON 字符串字面量
+  if (s.length > 1 && s[0] === '"' && s[s.length - 1] === '"') {
+    try {
+      const v = JSON.parse(s)
+      if (typeof v === 'string') s = v.trim()
+    } catch {
+      // 不是合法 JSON 字符串，继续走下面的手工还原
+    }
+  }
+
+  // 2) 残留的 JSON 转义
+  if (/\\[nrt"\/\\]/.test(s)) {
+    s = s
+      .replace(/\\r/g, '\r')
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+      .replace(/\\"/g, '"')
+      .replace(/\\'/g, "'")
+      .replace(/\\\//g, '/')
+      .replace(/\\\\/g, '\\')
+  }
+
+  // 3) HTML 实体（&amp; 放最后，避免把上面解出来的实体再解一次）
+  if (/&(?:lt|gt|quot|amp|#34|#39);/.test(s)) {
+    s = s
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#34;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, '&')
+  }
+
+  return s
+}
+
 /** 从一行的内部片段里取出「真正的歌词文本」，按 TTML 语义排除翻译/音译/注音 */
 function lyricTextOf(inner) {
   let s = String(inner || '')
@@ -115,7 +167,7 @@ function translationsOf(inner) {
 
 /** 解析成摘要 + 问题列表 */
 function parse(ttml) {
-  const src = String(ttml || '')
+  const src = normalizeTtmlInput(ttml)
   const problems = []
 
   if (!src.trim()) return { problems: ['TTML 是空的'], digest: null }
@@ -317,6 +369,7 @@ module.exports = {
   contentRatio,
   lyricTextOf,
   translationsOf,
+  normalizeTtmlInput,
   lrcTextOf,
   lyricUsable,
   normalize,

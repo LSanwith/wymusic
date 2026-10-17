@@ -298,6 +298,55 @@
         }
 
         /**
+         * 把「从接口或网页里复制出来的」TTML 还原成真正的 XML。
+         *
+         * 最常见的坑：直接从接口返回的 JSON 里复制 ttml / ttmlLocalizations 字段值，
+         * 拿到的是 JSON 转义后的字符串 —— 属性引号前带反斜杠、整份挤成一行：
+         *     <tt xmlns=\"http://www.w3.org/ns/ttml\">
+         * 这种喂给 XML 解析器会报 AttValue: " or ' expected。
+         * 从网页代码块复制则可能带 HTML 实体（&lt;tt ...&gt;）。两种都在这里还原。
+         */
+        function normalizeTtmlInput(raw) {
+            let s = String(raw == null ? '' : raw).trim()
+            if (!s) return s
+
+            // 整段是一个 JSON 字符串字面量
+            if (s.length > 1 && s[0] === '"' && s[s.length - 1] === '"') {
+                try {
+                    const v = JSON.parse(s)
+                    if (typeof v === 'string') s = v.trim()
+                } catch {
+                    /* 不是合法 JSON 字符串，继续手工还原 */
+                }
+            }
+
+            // 残留的 JSON 转义
+            if (/\\[nrt"\/\\]/.test(s)) {
+                s = s
+                    .replace(/\\r/g, '\r')
+                    .replace(/\\n/g, '\n')
+                    .replace(/\\t/g, '\t')
+                    .replace(/\\"/g, '"')
+                    .replace(/\\'/g, "'")
+                    .replace(/\\\//g, '/')
+                    .replace(/\\\\/g, '\\')
+            }
+
+            // HTML 实体（&amp; 放最后）
+            if (/&(?:lt|gt|quot|amp|#34|#39);/.test(s)) {
+                s = s
+                    .replace(/&lt;/g, '<')
+                    .replace(/&gt;/g, '>')
+                    .replace(/&quot;/g, '"')
+                    .replace(/&#34;/g, '"')
+                    .replace(/&#39;/g, "'")
+                    .replace(/&amp;/g, '&')
+            }
+
+            return s
+        }
+
+        /**
          * AMLL 的解析器要求每个 <p> 都带 itunes:key（否则整份解析出 0 行），
          * 并且用了 itunes: 前缀就必须声明对应的命名空间。
          * 这里给缺失的补上，让普通 TTML 也能直接喂给 AMLL。
@@ -310,11 +359,20 @@
                     (m, a) => `<tt${a} xmlns:itunes="http://music.apple.com/lyric-ttml-internal">`,
                 )
             }
+            // 已有的 key 先占位，免得补的时候撞号 —— 侧幕翻译就是靠 key 对应的
+            const used = new Set(
+                [...s.matchAll(/itunes:key\s*=\s*["']([^"']+)["']/g)].map((m) => m[1]),
+            )
             let n = 0
             return s.replace(/<p\b([^>]*)>/g, (m, a) => {
                 if (/itunes:key\s*=/.test(a)) return m
-                n++
-                return `<p${a} itunes:key="L${n}">`
+                let key
+                do {
+                    n++
+                    key = 'L' + n
+                } while (used.has(key))
+                used.add(key)
+                return `<p${a} itunes:key="${key}">`
             })
         }
 
@@ -354,7 +412,9 @@
         }
 
         /** 把一份 TTML 渲染进 AMLL 播放器 */
-        function render(ttml) {
+        function render(rawTtml) {
+            // 先还原 JSON 转义 / HTML 实体，再补 itunes:key，最后交给 AMLL
+            const ttml = normalizeTtmlInput(rawTtml)
             const parsed = parseTTML(prepForAmll(ttml))
             const lines = parsed.lines || []
             if (!lines.length) {
