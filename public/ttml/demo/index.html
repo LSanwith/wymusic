@@ -164,6 +164,14 @@
             color: rgba(255, 255, 255, 0.4);
             font-family: ui-monospace, Consolas, monospace;
         }
+        /* 翻译副行，右缩进对齐到正文起点（AMLL / Apple Music 的做法） */
+        .line .sub {
+            margin-left: 64px;
+            font-size: 12px;
+            line-height: 1.45;
+            color: rgba(255, 255, 255, 0.42);
+        }
+        .line.on .sub { color: rgba(255, 255, 255, 0.68); }
         a { color: #9ecbff; }
     </style>
 </head>
@@ -274,22 +282,61 @@ if (data.code === 200) console.log(data.ttml);
                 this.value = this.value.replace(/\D/g, '').slice(0, 20);
             });
 
-            /** 把 TTML 解析成 [{begin, end, text}]，演示用，够粗糙 */
+            /** 取属性值，单双引号都认 */
+            function attrOf(attrs, name) {
+                var re = new RegExp('(?:^|\\s)' + name + '\\s*=\\s*["\']([^"\']*)["\']', 'i');
+                var m = String(attrs || '').match(re);
+                return m ? m[1] : null;
+            }
+
+            function stripTags(s) {
+                return String(s || '')
+                    .replace(/<br\s*\/?>/gi, ' ')
+                    .replace(/<[^>]*>/g, '')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+            }
+
+            /**
+             * 把 TTML 解析成 [{begin, end, text, trans}]
+             *
+             * 按 TTML / Apple Music 的语义排除「非歌词」内容，否则预览里会混进翻译和注音：
+             *   <span ttm:role="x-translation"> 翻译（另外收进 trans，作为副行显示）
+             *   <span ttm:role="x-roman">       音译，丢弃
+             *   <span tts:ruby="text">          注音（振假名等），丢弃；base 才是正文
+             *   <span ttm:role="x-bg">          背景人声，属于歌词，保留
+             */
             function parseLines(ttml) {
                 var out = [];
                 var re = /<p\b([^>]*)>([\s\S]*?)<\/p>/gi;
                 var m;
                 while ((m = re.exec(ttml))) {
                     var attrs = m[1] || '';
-                    var text = String(m[2])
-                        .replace(/<br\s*\/?>/gi, ' ')
-                        .replace(/<[^>]*>/g, '')
-                        .replace(/\s+/g, ' ')
-                        .trim();
-                    var b = attrs.match(/\bbegin\s*=\s*"([^"]*)"/i);
-                    var e = attrs.match(/\bend\s*=\s*"([^"]*)"/i);
+                    // 整行就是翻译/音译的写法，跳过
+                    if (/ttm:role\s*=\s*["']x-(?:translation|roman)["']/i.test(attrs)) continue;
+
+                    var inner = m[2] || '';
+                    var trans = [];
+                    var tRe = /<span\b[^>]*ttm:role\s*=\s*["']x-translation["'][^>]*>([\s\S]*?)<\/span>/gi;
+                    var tm;
+                    while ((tm = tRe.exec(inner))) {
+                        var tt = stripTags(tm[1]);
+                        if (tt) trans.push(tt);
+                    }
+
+                    var lyric = inner
+                        .replace(/<span\b[^>]*tts:ruby\s*=\s*["']text(?:Container)?["'][^>]*>[\s\S]*?<\/span>/gi, '')
+                        .replace(/<span\b[^>]*ttm:role\s*=\s*["']x-(?:translation|roman)["'][^>]*>[\s\S]*?<\/span>/gi, '');
+                    var text = stripTags(lyric);
                     if (!text) continue;
-                    out.push({ begin: b ? toSec(b[1]) : null, end: e ? toSec(e[1]) : null, text: text });
+
+                    var begin = toSec(attrOf(attrs, 'begin'));
+                    var end = toSec(attrOf(attrs, 'end'));
+                    if (end == null && begin != null) {
+                        var dur = toSec(attrOf(attrs, 'dur'));
+                        if (dur != null) end = begin + dur;
+                    }
+                    out.push({ begin: begin, end: end, text: text, trans: trans.join(' ') });
                 }
                 return out;
             }
@@ -297,6 +344,9 @@ if (data.code === 200) console.log(data.ttml);
             function toSec(v) {
                 if (v == null || v === '') return null;
                 var s = String(v).trim();
+                // 规范里的秒值写法：12.3s
+                var sm = s.match(/^(\d+(?:\.\d+)?)s$/i);
+                if (sm) return Number(sm[1]);
                 if (/^\d+(\.\d+)?$/.test(s)) return Number(s);
                 var m = s.match(/^(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:[.,](\d+))?$/);
                 if (!m) return null;
@@ -327,7 +377,17 @@ if (data.code === 200) console.log(data.ttml);
                     t.className = 't';
                     t.textContent = fmt(it.begin);
                     d.appendChild(t);
-                    d.appendChild(document.createTextNode(it.text));
+                    var main = document.createElement('span');
+                    main.className = 'main';
+                    main.textContent = it.text;
+                    d.appendChild(main);
+                    // 翻译作为副行显示（AMLL / Apple Music 的做法）
+                    if (it.trans) {
+                        var sub = document.createElement('div');
+                        sub.className = 'sub';
+                        sub.textContent = it.trans;
+                        d.appendChild(sub);
+                    }
                     linesBox.appendChild(d);
                 });
                 playBtn.disabled = !list.some(function (x) { return x.begin != null; });
