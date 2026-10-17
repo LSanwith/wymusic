@@ -6,7 +6,7 @@
 // 且 0 token。
 //
 // 规则（都是硬的，任一不过就拒）：
-//   1. 体积 ≤ 256KB，必须有 <tt> 根节点且闭合
+//   1. 体积 ≤ 2MB，必须有 <tt> 根节点且闭合
 //   2. 每行 <p> 都必须同时有 begin 和 end，且 end > begin
 //   3. 时间轴严格递增
 //   4. 行数 ≥ 8、≤ 4000；不能有空行
@@ -14,7 +14,12 @@
 //   6. 行内文本重复率不能过高（同一句刷满全部行）
 //   7. 与官方歌词的 4-gram 重合率 ≥ 70%，且对【每个】id 都要成立
 //   8. 该曲必须有官方歌词（纯音乐、无歌词一律拒）
-const MAX_TTML_BYTES = 256 * 1024
+//
+// 关于体积上限：实测中文歌逐行约 4KB、逐字 span 约 32KB、逐字+双语约 64KB，
+// 但超长歌曲 / 每个 span 都带 ttm:agent 等属性 / 多语言 div 叠加时会明显变大，
+// 所以放宽到 2MB。Vercel 函数请求体上限是 4.5MB，2MB 留足了余量；
+// 而且体积几乎全在标记上，剥出来参与比对的正文只有几 KB，不影响比对性能。
+const MAX_TTML_BYTES = 2 * 1024 * 1024
 const MIN_LINES = 8
 const MAX_LINES = 4000
 const MIN_NGRAM_RATIO = 0.7
@@ -59,7 +64,7 @@ function parse(ttml) {
 
   if (!src.trim()) return { problems: ['TTML 是空的'], digest: null }
   if (Buffer.byteLength(src, 'utf8') > MAX_TTML_BYTES) {
-    return { problems: ['TTML 太大（超过 256KB）'], digest: null }
+    return { problems: ['TTML 太大（超过 2MB）'], digest: null }
   }
 
   const hasTt = /<tt[\s>]/i.test(src)
