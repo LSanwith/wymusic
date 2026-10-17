@@ -249,6 +249,7 @@
             <textarea id="ttmlText" placeholder="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;&#10;&lt;tt xmlns=&quot;http://www.w3.org/ns/ttml&quot;&gt; ... &lt;/tt&gt;"></textarea>
 
             <span class="label">对应的网易云歌曲 id（必填，可多个，每个空只填一个）</span>
+            <div id="songSearch"></div>
             <div id="idList"></div>
             <div class="row" style="margin-top:10px">
                 <button type="button" id="addId">+ 添加一个 id</button>
@@ -292,6 +293,7 @@
         </div>
     </div>
 
+    <script src="/ttml/song-search.js"></script>
     <script>
         (function () {
             'use strict';
@@ -302,6 +304,7 @@
 
             var $ = function (id) { return document.getElementById(id); };
             var idList = $('idList');
+            var songSearch = null;   // 搜索结果组件，用来标出「已在列表里」的 id
             var ttmlText = $('ttmlText');
             var resultInfo = $('resultInfo');
             var resultBody = $('resultBody');
@@ -352,6 +355,8 @@
                     row.remove();
                     renumber();
                     ensureOneRow();
+                    // 删掉之后，搜索结果里对应那条不再算「已在列表」
+                    if (songSearch) songSearch.refreshUsed();
                 });
                 idList.appendChild(row);
                 renumber();
@@ -382,6 +387,48 @@
                 }
                 addIdRow('').focus();
             });
+
+            /* ---------- 按歌名搜歌：点一下填入空位，再点一下移除 ---------- */
+            function toggleSongId(id) {
+                id = String(id || '').replace(/\D/g, '').slice(0, 20);
+                if (!id) return;
+                var rows = idList.querySelectorAll('.id-row');
+                var empty = null;
+                for (var i = 0; i < rows.length; i++) {
+                    var inp = rows[i].querySelector('input');
+                    var v = inp.value.trim();
+                    if (v === id) {
+                        // 已经在列表里 → 移除（只剩这一行就清空，由 ensureOneRow 兜底）
+                        rows[i].remove();
+                        renumber();
+                        ensureOneRow();
+                        if (songSearch) songSearch.refreshUsed();
+                        setResult('已从列表移除 id ' + id + '。', 'ok');
+                        return;
+                    }
+                    if (!empty && !v) empty = inp;
+                }
+                if (empty) {
+                    empty.value = id;
+                    empty.focus({ preventScroll: true });
+                } else if (rows.length >= 8) {
+                    setResult('一次最多 8 个 id。', 'err');
+                    return;
+                } else {
+                    addIdRow(id);
+                }
+                if (songSearch) songSearch.refreshUsed();
+                setResult('已填入 id ' + id + '。', 'ok');
+            }
+
+            if (window.SongSearch) {
+                songSearch = SongSearch.mount($('songSearch'), {
+                    placeholder: '按歌名或歌曲 id 搜索，例如 晴天',
+                    hint: '点一下填入 id，再点一下从列表移除；已填的会标绿',
+                    getUsedIds: collectIds,
+                    onPick: function (song) { toggleSongId(song.id); },
+                });
+            }
 
             /* ---------- 选文件填进 textarea ---------- */
             $('ttmlFile').addEventListener('change', function () {
