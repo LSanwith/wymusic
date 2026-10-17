@@ -270,13 +270,33 @@
                     m.textContent = fmtSize(it.size) + ' · ' + fmtTime(it.uploadedAt);
                     left.appendChild(m);
                     top.appendChild(left);
+                    var acts = document.createElement('div');
+                    acts.className = 'row';
+                    acts.style.gap = '8px';
                     var a = document.createElement('a');
                     a.className = 'hint';
                     a.href = it.url;
                     a.target = '_blank';
                     a.rel = 'noopener';
                     a.textContent = '下载';
-                    top.appendChild(a);
+                    acts.appendChild(a);
+                    var del = document.createElement('button');
+                    del.type = 'button';
+                    del.className = 'danger';
+                    del.textContent = '删除这份';
+                    del.addEventListener('click', function () {
+                        var key = 'legacy:' + it.songId;
+                        if (pending !== key) {
+                            pending = key;
+                            del.textContent = '再点一次：真删除';
+                            say('确认删除老格式 ttml/' + it.songId + '.ttml？会从 Blob 真删掉。');
+                            return;
+                        }
+                        pending = null;
+                        doDestroyLegacy(it.songId, del);
+                    });
+                    acts.appendChild(del);
+                    top.appendChild(acts);
                     el.appendChild(top);
                     box.appendChild(el);
                 });
@@ -289,6 +309,30 @@
                     method: 'POST',
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify({ ttmlId: ttmlId }),
+                })
+                    .then(function (r) {
+                        btn.disabled = false;
+                        if (needVerify(r)) return;
+                        if (r.data && r.data.code === 200) {
+                            say(r.data.msg, 'ok');
+                            load();
+                        } else {
+                            say((r.data && r.data.msg) || ('HTTP ' + r.status), 'err');
+                        }
+                    })
+                    .catch(function (e) {
+                        btn.disabled = false;
+                        say('删除失败：' + (e && e.message ? e.message : e), 'err');
+                    });
+            }
+
+            function doDestroyLegacy(songId, btn) {
+                btn.disabled = true;
+                say('删除中…');
+                api('/ttml/destroy', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ songId: songId }),
                 })
                     .then(function (r) {
                         btn.disabled = false;

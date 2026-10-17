@@ -22,10 +22,45 @@ module.exports = async (query) => {
   const ttmlId = String(query.ttmlId == null ? '' : query.ttmlId)
     .trim()
     .toLowerCase()
+  const songId = String(query.songId == null ? '' : query.songId).trim()
+
+  // 老格式（ttml/<歌曲id>.ttml）：按歌曲 id 删，没有 ttmlId 概念
+  if (!ttmlId && songId) {
+    if (!store.isValidId(songId)) {
+      return {
+        status: 400,
+        body: { code: 400, msg: 'songId 必须是纯数字' },
+      }
+    }
+    let lg
+    try {
+      lg = await store.destroyLegacy(songId)
+    } catch (e) {
+      return {
+        status: 500,
+        body: { code: 500, msg: '删除失败：' + (e.message || e) },
+      }
+    }
+    return {
+      status: 200,
+      body: {
+        code: 200,
+        ok: true,
+        msg: lg.deleted
+          ? `已删除老格式 ttml/${songId}.ttml`
+          : `老格式里没有 ${songId}`,
+        songId,
+        legacy: true,
+        contentDeleted: lg.deleted,
+        unbound: lg.deleted ? [songId] : [],
+      },
+    }
+  }
+
   if (!ttmlId) {
     return {
       status: 400,
-      body: { code: 400, msg: 'ttmlId 必填：要删哪一份' },
+      body: { code: 400, msg: 'ttmlId 必填（老格式数据可以用 songId）' },
     }
   }
   if (!store.isValidTtmlId(ttmlId)) {

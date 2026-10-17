@@ -369,6 +369,22 @@ async function unbind(songId, ttmlId) {
   }
 }
 
+/** 真删除老格式 ttml/<歌曲id>.ttml（没有 ttmlId 的历史数据） */
+async function destroyLegacy(songId) {
+  const { head, del } = require('@vercel/blob')
+  if (!isValidId(songId)) return { songId, deleted: false }
+  try {
+    const meta = await head(legacyKey(songId))
+    if (meta && meta.url) {
+      await del(meta.url)
+      return { songId, deleted: true }
+    }
+  } catch {
+    /* 不存在 */
+  }
+  return { songId, deleted: false }
+}
+
 /** 列出所有内容与绑定（后台用） */
 async function listAll() {
   const { list } = require('@vercel/blob')
@@ -532,5 +548,6 @@ module.exports = {
   bindingsOfTtml,
   listAll,
   destroyTtml,
+  destroyLegacy,
   downloadUrl,
 }
