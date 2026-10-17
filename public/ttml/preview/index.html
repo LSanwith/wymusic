@@ -7,6 +7,9 @@
     <link rel="icon" href="/docs/netease.png">
     <title>TTML 歌词预览 · Sanwith</title>
     <link rel="stylesheet" href="/nav.css">
+    <!-- AMLL 播放器的样式：两个 CDN 互为兜底，谁先到用谁 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@applemusic-like-lyrics/core@0.6.0/dist/style.css">
+    <link rel="stylesheet" href="https://unpkg.com/@applemusic-like-lyrics/core@0.6.0/dist/style.css">
     <style>
         :root {
             --fg: #ffffff;
@@ -16,8 +19,6 @@
             --btn-bg: rgba(255, 255, 255, 0.12);
             --ok: #7ee2a8;
             --err: #ff9c9c;
-            --lyric-dim: rgba(255, 255, 255, 0.32);
-            --lyric-lit: #ffffff;
         }
         * { box-sizing: border-box; }
         html { scrollbar-width: none; -ms-overflow-style: none; }
@@ -48,7 +49,7 @@
             inset: 0;
             z-index: -1;
             pointer-events: none;
-            background: rgba(0, 0, 0, 0.68);
+            background: rgba(0, 0, 0, 0.7);
         }
         .container {
             max-width: 960px;
@@ -98,7 +99,7 @@
         }
         textarea {
             width: 100%;
-            min-height: 160px;
+            min-height: 150px;
             flex: none;
             resize: vertical;
             font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
@@ -132,7 +133,7 @@
             flex-wrap: wrap;
             gap: 12px;
             align-items: center;
-            margin-bottom: 8px;
+            margin-bottom: 14px;
         }
         .controls button { min-width: 88px; }
         input[type="range"] {
@@ -146,82 +147,47 @@
             font-family: ui-monospace, Consolas, monospace;
             font-size: 12.5px;
             color: var(--muted);
-            min-width: 120px;
+            min-width: 128px;
             text-align: right;
         }
-
-        /* 歌词舞台：上下渐隐，只让中间那段清晰 */
-        .stage {
+        /* AMLL 播放器自己的容器。背景要够深，否则白色歌词压在亮背景图上会发灰 */
+        #stage {
             position: relative;
-            height: 420px;
-            margin-top: 10px;
+            height: 460px;
+            border-radius: 12px;
             overflow: hidden;
-            mask-image: linear-gradient(180deg, transparent 0%, #000 18%, #000 82%, transparent 100%);
-            -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 18%, #000 82%, transparent 100%);
+            background: #14161c;
+            border: 1px solid rgba(255, 255, 255, 0.08);
         }
-        .lines {
+        #stageMount { width: 100%; height: 100%; }
+        /* AMLL 默认给播放器 mix-blend-mode: plus-lighter（要配合专辑封面背景）。
+           本页背景是深色图，这个混合模式会让歌词几乎看不见，改成普通混合；
+           注意 contain: strict 不能动 —— 它内部是按这个约束做绝对定位的。 */
+        #stageMount .amll-lyric-player {
+            mix-blend-mode: normal !important;
+            --amll-lp-color: #fff;
+        }
+        #stageHint {
             position: absolute;
-            left: 0;
-            right: 0;
-            top: 0;
-            will-change: transform;
-            transition: transform 0.5s cubic-bezier(0.22, 0.61, 0.36, 1);
-        }
-        .line {
-            padding: 14px 8px;
-            text-align: center;
-            cursor: pointer;
-            transition: opacity 0.35s;
-            opacity: 0.55;
-            user-select: none;
-        }
-        .line:hover { opacity: 0.8; }
-        .line.on { opacity: 1; }
-        .line .main {
-            font-size: 22px;
-            font-weight: 600;
-            line-height: 1.5;
-            letter-spacing: 0.01em;
-        }
-        .line.on .main { font-size: 25px; }
-        .line .main { transition: font-size 0.35s; }
-
-        /* 逐字点亮：用 background-clip:text 做填充进度，--p 是 0..1 */
-        .w {
-            background-image: linear-gradient(
-                90deg,
-                var(--lyric-lit) 0%,
-                var(--lyric-lit) calc(var(--p, 0) * 100%),
-                var(--lyric-dim) calc(var(--p, 0) * 100%),
-                var(--lyric-dim) 100%
-            );
-            -webkit-background-clip: text;
-            background-clip: text;
-            color: transparent;
-        }
-        /* 背景人声：小一号，加括号（已由解析器带上标记） */
-        .w.bg { font-size: 0.78em; opacity: 0.85; }
-        .line .trans,
-        .line .roman {
-            margin-top: 4px;
-            font-size: 13px;
-            font-weight: 400;
-            color: rgba(255, 255, 255, 0.42);
-            transition: color 0.35s;
-        }
-        .line .roman { font-size: 12px; color: rgba(255, 255, 255, 0.3); font-style: italic; }
-        .line.on .trans { color: rgba(255, 255, 255, 0.78); }
-        .line.on .roman { color: rgba(255, 255, 255, 0.6); }
-
-        .empty {
+            inset: 0;
             display: flex;
             align-items: center;
             justify-content: center;
-            height: 100%;
+            text-align: center;
+            padding: 24px;
             color: var(--muted);
             font-size: 14px;
+            pointer-events: none;
         }
-        .links { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 4px; font-size: 13px; }
+        #stageHint.gone { display: none; }
+        .meta {
+            margin-top: 12px;
+            font-size: 13px;
+            color: var(--muted);
+            word-break: break-word;
+        }
+        .meta b { color: var(--fg); font-weight: 500; }
+        .links { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 14px; font-size: 13px; }
     </style>
 </head>
 <body>
@@ -234,14 +200,14 @@
         <span class="nav-brand">
             <a href="https://github.com/neteasecloudmusicapienhanced/api-enhanced" target="_blank" rel="noopener">GitHub</a>
             <span class="footer-sep">|</span>
-            <a href="https://qm.qq.com/q/eetuZkIV20" target="_blank" rel="noopener">添加管理员QQ</a>
+            <a href="https://qm.qq.com/eetuZkIV20" target="_blank" rel="noopener">添加管理员QQ</a>
         </span>
     </nav>
 
     <main class="container">
         <header class="site-header">
             <h1>TTML 歌词预览</h1>
-            <p class="sub">按时间轴滚动 · 逐字点亮 · 翻译作副行 · 点任意一行可跳转</p>
+            <p class="sub">AMLL 播放器渲染 · 逐字点亮 · 翻译/音译/背景人声/对唱均由规范自动处理</p>
         </header>
 
         <section class="block">
@@ -249,6 +215,7 @@
             <div class="row">
                 <input type="text" id="songId" inputmode="numeric" maxlength="20" placeholder="网易云歌曲 id，例如 186016">
                 <button type="button" id="loadBtn">按 id 读取</button>
+                <button type="button" id="demoBtn">示例</button>
                 <button type="button" id="pasteToggle">粘贴 TTML</button>
             </div>
             <div id="pasteWrap" hidden style="margin-top:12px">
@@ -258,7 +225,8 @@
                     <button type="button" id="usePasted">使用这份 TTML</button>
                 </div>
             </div>
-            <div class="hint" id="loadInfo">先按 id 读取一份已通过审核的歌词，或者直接粘贴 TTML。</div>
+            <div class="meta" id="meta"></div>
+            <div class="hint" id="loadInfo">按 id 读取已通过审核的歌词，或直接粘贴 TTML。播放器由 AMLL 提供。</div>
         </section>
 
         <section class="block">
@@ -268,499 +236,313 @@
                 <input type="range" id="seek" min="0" max="1000" value="0" step="1" disabled>
                 <span id="clock">00:00.00 / 00:00.00</span>
             </div>
-            <div class="stage">
-                <div class="lines" id="lines">
-                    <div class="empty">还没有加载歌词</div>
-                </div>
+            <div id="stage">
+                <div id="stageMount"></div>
+                <div id="stageHint">还没有加载歌词</div>
             </div>
             <div class="links">
                 <a href="/ttml/">上传 TTML →</a>
                 <a href="/ttml/demo/">接口演示 →</a>
+                <a href="https://amll.dev/reference/core" target="_blank" rel="noopener">AMLL 文档 ↗</a>
             </div>
         </section>
     </main>
 
-    <script>
-        (function () {
-            'use strict';
+    <script type="module">
+        const $ = (id) => document.getElementById(id)
+        const loadInfo = $('loadInfo')
+        const metaBox = $('meta')
+        const stageMount = $('stageMount')
+        const stageHint = $('stageHint')
+        const playBtn = $('playBtn')
+        const resetBtn = $('resetBtn')
+        const seek = $('seek')
+        const clock = $('clock')
 
-            var $ = function (id) { return document.getElementById(id); };
-            var linesBox = $('lines');
-            var loadInfo = $('loadInfo');
-            var playBtn = $('playBtn');
-            var resetBtn = $('resetBtn');
-            var seek = $('seek');
-            var clock = $('clock');
+        const CORE_CDNS = [
+            'https://esm.sh/@applemusic-like-lyrics/core',
+            'https://esm.sh/@applemusic-like-lyrics/core?bundle=all',
+        ]
+        const TTML_CDNS = [
+            'https://esm.sh/@applemusic-like-lyrics/ttml',
+            'https://esm.sh/@applemusic-like-lyrics/ttml?bundle=all',
+        ]
 
-            var lines = [];        // [{begin, end, words:[{begin,end,text,bg}], text, trans, roman}]
-            var nodes = [];        // 每行的 DOM
-            var duration = 0;
-            var t = 0;             // 当前播放时间（秒）
-            var playing = false;
-            var rafId = null;
-            var lastTs = 0;
-            var activeIdx = -1;
+        let Player = null
+        let parseTTML = null
+        let player = null
+        let duration = 0        // 秒
+        let t = 0               // 当前播放时间（秒）
+        let playing = false
+        let raf = 0
+        let lastTs = 0
 
-            /* ---------- 小工具 ---------- */
-            function say(text, kind) {
-                loadInfo.textContent = text;
-                loadInfo.className = 'hint' + (kind ? ' ' + kind : '');
+        function say(text, kind) {
+            loadInfo.textContent = text
+            loadInfo.className = 'hint' + (kind ? ' ' + kind : '')
+        }
+        function fmt(sec) {
+            if (!isFinite(sec) || sec < 0) sec = 0
+            const m = Math.floor(sec / 60)
+            const s = sec - m * 60
+            return String(m).padStart(2, '0') + ':' + s.toFixed(2).padStart(5, '0')
+        }
+        function ms(sec) { return Math.round(sec * 1000) }
+
+        async function importFirst(list) {
+            let lastErr = null
+            for (const url of list) {
+                try { return await import(url) } catch (e) { lastErr = e }
             }
-            function norm(s) { return String(s || '').replace(/\s+/g, ' ').trim(); }
-            function attrOf(attrs, name) {
-                var re = new RegExp('(?:^|\\s)' + name + '\\s*=\\s*["\']([^"\']*)["\']', 'i');
-                var m = String(attrs || '').match(re);
-                return m ? m[1] : null;
+            throw lastErr || new Error('全部 CDN 失败')
+        }
+
+        /**
+         * AMLL 的解析器要求每个 <p> 都带 itunes:key（否则整份解析出 0 行），
+         * 并且用了 itunes: 前缀就必须声明对应的命名空间。
+         * 这里给缺失的补上，让普通 TTML 也能直接喂给 AMLL。
+         */
+        function prepForAmll(ttml) {
+            let s = String(ttml || '')
+            if (!/xmlns:itunes\s*=/.test(s)) {
+                s = s.replace(
+                    /<tt\b([^>]*)>/,
+                    (m, a) => `<tt${a} xmlns:itunes="http://music.apple.com/lyric-ttml-internal">`,
+                )
             }
-            function toSec(v) {
-                if (v == null || v === '') return null;
-                var s = String(v).trim();
-                var sm = s.match(/^(\d+(?:\.\d+)?)s$/i);
-                if (sm) return Number(sm[1]);
-                if (/^\d+(\.\d+)?$/.test(s)) return Number(s);
-                var m = s.match(/^(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:[.,](\d+))?$/);
-                if (!m) return null;
-                return (m[1] ? Number(m[1]) * 3600 : 0) + Number(m[2]) * 60 + Number(m[3]) +
-                    (m[4] ? Number('0.' + m[4]) : 0);
+            let n = 0
+            return s.replace(/<p\b([^>]*)>/g, (m, a) => {
+                if (/itunes:key\s*=/.test(a)) return m
+                n++
+                return `<p${a} itunes:key="L${n}">`
+            })
+        }
+
+        /** 从 AMLL 的 metadata（Map 或普通对象）里取一行摘要 */
+        function metaText(metadata) {
+            if (!metadata) return ''
+            const pick = (k) => {
+                let v
+                if (typeof metadata.get === 'function') v = metadata.get(k)
+                else v = metadata[k]
+                if (Array.isArray(v)) v = v[0]
+                return v ? String(v) : ''
             }
-            function fmt(sec) {
-                if (!isFinite(sec) || sec < 0) sec = 0;
-                var m = Math.floor(sec / 60);
-                var s = sec - m * 60;
-                return String(m).padStart(2, '0') + ':' + s.toFixed(2).padStart(5, '0');
+            const parts = []
+            const name = pick('musicName')
+            const artists = pick('artists')
+            const album = pick('album')
+            const lang = pick('language')
+            const timing = pick('timingMode')
+            if (name) parts.push('<b>' + name + '</b>')
+            if (artists) parts.push(artists)
+            if (album) parts.push('《' + album + '》')
+            if (lang) parts.push('语言 ' + lang)
+            if (timing) parts.push(timing === 'Word' ? '逐字' : '逐行')
+            return parts.join(' · ')
+        }
+
+        function setControls(enabled) {
+            playBtn.disabled = !enabled
+            resetBtn.disabled = !enabled
+            seek.disabled = !enabled
+        }
+
+        function updateClock() {
+            clock.textContent = fmt(t) + ' / ' + fmt(duration)
+            seek.value = duration > 0 ? String(Math.round((t / duration) * 1000)) : '0'
+        }
+
+        /** 把一份 TTML 渲染进 AMLL 播放器 */
+        function render(ttml) {
+            const parsed = parseTTML(prepForAmll(ttml))
+            const lines = parsed.lines || []
+            if (!lines.length) {
+                say('解析出 0 行。AMLL 需要每行带 itunes:key，我已经自动补了；还是 0 行说明这份 TTML 的结构 AMLL 不认。', 'err')
+                stageHint.textContent = '这份 TTML 解析不出歌词行'
+                stageHint.classList.remove('gone')
+                setControls(false)
+                return 0
             }
 
-            /* ---------- TTML 解析 ---------- */
-            // 非歌词内容：翻译 / 音译 / Ruby 注音
-            var RUBY_TEXT = /tts:ruby\s*=\s*["']text(?:Container)?["']/i;
-            var ROLE = /ttm:role\s*=\s*["']x-([\w-]+)["']/i;
+            pause()
+            if (!player) {
+                player = new Player()
+                const el = player.getElement()
+                el.style.width = '100%'
+                el.style.height = '100%'
+                stageMount.innerHTML = ''
+                stageMount.appendChild(el)
+                if (typeof player.onResize === 'function') player.onResize()
+            }
+            player.setLyricLines(lines, 0)
+            // 容器尺寸变了要重新量一次，否则歌词会按旧高度定位、跑到可视区外
+            if (typeof player.onResize === 'function') player.onResize()
 
-            /**
-             * 解析一行内部片段，返回 { words, text, trans, roman }
-             * 用栈扫描 span：每个 span 只累积「自己的直接文字」，
-             * 这样嵌套的 x-bg（外层带时间、内层才是文字）不会重复。
-             */
-            function parseInner(inner, pBegin, pEnd) {
-                var words = [];
-                var trans = [];
-                var roman = [];
-                var stack = [];
-                var topBuf = '';
-                var re = /<(\/?)(span|br)\b([^>]*?)(\/?)>|([^<]+)/gi;
-                var m;
+            duration = (lines[lines.length - 1].endTime || 0) / 1000
+            t = 0
+            stageHint.classList.add('gone')
+            setControls(true)
+            updateClock()
+            player.setCurrentTime(0)
+            player.update(16)
 
-                while ((m = re.exec(inner))) {
-                    // 纯文本
-                    if (m[5] !== undefined) {
-                        if (stack.length) stack[stack.length - 1].buf += m[5];
-                        else topBuf += m[5];
-                        continue;
-                    }
-                    var closing = m[1] === '/';
-                    var tag = (m[2] || '').toLowerCase();
-                    var attrs = m[3] || '';
-                    var selfClose = m[4] === '/';
+            metaBox.innerHTML = metaText(parsed.metadata)
+            say('已加载 ' + lines.length + ' 行，总长 ' + fmt(duration).slice(3) + '，点播放开始预览。', 'ok')
+            return lines.length
+        }
 
-                    if (tag === 'br') {
-                        if (stack.length) stack[stack.length - 1].buf += ' ';
-                        else topBuf += ' ';
-                        continue;
-                    }
+        /* ---------- 播放循环：我们自己算时间，推进给 AMLL ---------- */
+        function tick(ts) {
+            if (!playing) return
+            if (!lastTs) lastTs = ts
+            const dt = (ts - lastTs) / 1000
+            lastTs = ts
+            t += dt
+            if (t >= duration) {
+                t = duration
+                pushTime()
+                pause()
+                return
+            }
+            pushTime()
+            updateClock()
+            raf = requestAnimationFrame(tick)
+        }
+        function pushTime() {
+            if (!player) return
+            player.setCurrentTime(ms(t))
+            if (typeof player.update === 'function') player.update(16)
+        }
+        function play() {
+            if (!player || duration <= 0) return
+            if (t >= duration) t = 0
+            playing = true
+            lastTs = 0
+            playBtn.textContent = '⏸ 暂停'
+            if (typeof player.resume === 'function') player.resume()
+            raf = requestAnimationFrame(tick)
+        }
+        function pause() {
+            playing = false
+            if (raf) cancelAnimationFrame(raf)
+            raf = 0
+            playBtn.textContent = '▶ 播放'
+            if (player && typeof player.pause === 'function') player.pause()
+        }
+        function seekTo(sec) {
+            t = Math.max(0, Math.min(sec, duration || 0))
+            pushTime()
+            updateClock()
+        }
 
-                    if (closing) {
-                        var s = stack.pop();
-                        if (!s) continue;
-                        var text = norm(s.buf);
-                        if (s.kind === 'trans') { if (text) trans.push(text); continue; }
-                        if (s.kind === 'roman') { if (text) roman.push(text); continue; }
-                        if (s.kind === 'ruby') { continue; }
-                        // 普通 span：有完整时间又有自己的文字才算一个词
-                        if (s.begin != null && s.end != null && text) {
-                            words.push({ begin: s.begin, end: s.end, text: text, bg: s.bg });
-                        } else if (stack.length) {
-                            stack[stack.length - 1].buf += s.buf;
-                        } else {
-                            topBuf += s.buf;
-                        }
-                        continue;
-                    }
+        playBtn.addEventListener('click', () => { playing ? pause() : play() })
+        resetBtn.addEventListener('click', () => { pause(); seekTo(0); play() })
+        seek.addEventListener('input', () => {
+            pause()
+            seekTo((Number(seek.value) / 1000) * duration)
+        })
 
-                    // 开始标签
-                    var kind = 'lyric';
-                    var roleM = attrs.match(ROLE);
-                    if (RUBY_TEXT.test(attrs)) kind = 'ruby';
-                    else if (roleM && /^translation$/i.test(roleM[1])) kind = 'trans';
-                    else if (roleM && /^roman$/i.test(roleM[1])) kind = 'roman';
-
-                    var begin = toSec(attrOf(attrs, 'begin'));
-                    var end = toSec(attrOf(attrs, 'end'));
-                    if (end == null && begin != null) {
-                        var dur = toSec(attrOf(attrs, 'dur'));
-                        if (dur != null) end = begin + dur;
-                    }
-                    var parentBg = stack.length ? !!stack[stack.length - 1].bg : false;
-                    var isBg = parentBg || /ttm:role\s*=\s*["']x-bg["']/i.test(attrs);
-
-                    if (selfClose) continue;
-                    stack.push({ kind: kind, begin: begin, end: end, bg: isBg, buf: '' });
+        /* ---------- 数据来源 ---------- */
+        $('songId').addEventListener('input', function () {
+            this.value = this.value.replace(/\D/g, '').slice(0, 20)
+        })
+        $('loadBtn').addEventListener('click', async function () {
+            const id = $('songId').value.replace(/\D/g, '')
+            $('songId').value = id
+            if (!id) return say('先填一个歌曲 id。', 'err')
+            this.disabled = true
+            say('读取中…')
+            try {
+                const r = await fetch('/search?ttml=' + id + '&_=' + Date.now())
+                const j = await r.json()
+                if (j.code !== 200 || !j.ttml) {
+                    say((j.msg || '读取失败') + '（HTTP ' + j.code + '）', 'err')
+                    return
                 }
-
-                // 未闭合的，能当词就当词
-                while (stack.length) {
-                    var s2 = stack.pop();
-                    var tx = norm(s2.buf);
-                    if (s2.kind === 'lyric' && s2.begin != null && s2.end != null && tx) {
-                        words.push({ begin: s2.begin, end: s2.end, text: tx, bg: s2.bg });
-                    } else if (tx) {
-                        topBuf += s2.buf;
-                    }
-                }
-
-                words.sort(function (a, b) { return a.begin - b.begin; });
-
-                // 没有逐字，就用整行时间兜底
-                var raw = norm(words.map(function (w) { return w.text; }).join(''));
-                if (!words.length && raw) {
-                    words.push({ begin: pBegin, end: pEnd, text: raw, bg: false });
-                }
-                // 顶层还有没分配的文字，补给最后一个词，别丢字
-                if (norm(topBuf)) {
-                    if (words.length) words[words.length - 1].text += norm(topBuf);
-                    else words.push({ begin: pBegin, end: pEnd, text: norm(topBuf), bg: false });
-                }
-
-                return {
-                    words: words,
-                    text: norm(words.map(function (w) { return w.text; }).join('')),
-                    trans: trans.join(' '),
-                    roman: roman.join(' '),
-                };
+                render(j.ttml)
+            } catch (e) {
+                say('请求失败：' + (e && e.message ? e.message : e), 'err')
+            } finally {
+                this.disabled = false
             }
+        })
 
-            function parseTtml(ttml) {
-                var out = [];
-                var pRe = /<p\b([^>]*)>([\s\S]*?)<\/p>/gi;
-                var m;
-                var lastEnd = 0;
-                while ((m = pRe.exec(ttml))) {
-                    var attrs = m[1] || '';
-                    var roleM = attrs.match(ROLE);
-                    // 整行就是翻译/音译，跳过
-                    if (roleM && /^(translation|roman)$/i.test(roleM[1])) continue;
+        $('pasteToggle').addEventListener('click', () => {
+            const w = $('pasteWrap')
+            w.hidden = !w.hidden
+            if (!w.hidden) $('ttmlText').focus()
+        })
 
-                    var pBegin = toSec(attrOf(attrs, 'begin'));
-                    var pEnd = toSec(attrOf(attrs, 'end'));
-                    if (pEnd == null && pBegin != null) {
-                        var d = toSec(attrOf(attrs, 'dur'));
-                        if (d != null) pEnd = pBegin + d;
-                    }
+        /* 内置示例：带逐字时间、翻译、音译、背景人声，方便直接看效果 */
+        const DEMO_TTML = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xml:lang="zh" itunes:timing="Word">
+<body><div>
+<p begin="00:01.000" end="00:05.000"><span begin="00:01.000" end="00:03.000">故事</span><span begin="00:03.000" end="00:05.000">的小黄花</span><span ttm:role="x-translation" xml:lang="en">The little yellow flower</span><span ttm:role="x-roman" xml:lang="zh-Latn">gushi de xiaohuanghua</span></p>
+<p begin="00:05.000" end="00:09.000"><span begin="00:05.000" end="00:07.000">从出生那年</span><span begin="00:07.000" end="00:09.000">就飘着</span><span ttm:role="x-translation" xml:lang="en">has been drifting since the year I was born</span><span ttm:role="x-roman" xml:lang="zh-Latn">cong chusheng nanian</span></p>
+<p begin="00:09.000" end="00:13.000"><span begin="00:09.000" end="00:11.000">童年的</span><span begin="00:11.000" end="00:13.000">荡秋千</span><span ttm:role="x-translation" xml:lang="en">The swing of childhood</span></p>
+<p begin="00:13.000" end="00:17.000"><span begin="00:13.000" end="00:15.000">随记忆</span><span begin="00:15.000" end="00:17.000">一直晃到现在</span><span ttm:role="x-translation" xml:lang="en">swaying in my memory until now</span></p>
+<p begin="00:17.000" end="00:21.000"><span begin="00:17.000" end="00:19.000">吹着前奏</span><span begin="00:19.000" end="00:21.000">望着天空</span><span ttm:role="x-bg" begin="00:19.000" end="00:21.000"><span begin="00:19.000" end="00:21.000">（背景人声）</span></span><span ttm:role="x-translation" xml:lang="en">blowing the prelude, looking at the sky</span></p>
+<p begin="00:21.000" end="00:25.000"><span begin="00:21.000" end="00:23.000">我想起花瓣</span><span begin="00:23.000" end="00:25.000">试着掉落</span><span ttm:role="x-translation" xml:lang="en">I think of petals trying to fall</span></p>
+</div></body></tt>`
 
-                    var parsed = parseInner(m[2] || '', pBegin, pEnd);
-                    if (!parsed.text) continue;
+        $('demoBtn').addEventListener('click', () => {
+            $('ttmlText').value = DEMO_TTML
+            $('pasteWrap').hidden = false
+            useTtml(DEMO_TTML, '示例')
+        })
 
-                    var begin = pBegin;
-                    if (begin == null && parsed.words.length) begin = parsed.words[0].begin;
-                    if (begin == null) begin = lastEnd;
-
-                    var end = pEnd;
-                    if (end == null) {
-                        var me = 0;
-                        parsed.words.forEach(function (w) { if (w.end != null && w.end > me) me = w.end; });
-                        end = me > begin ? me : begin + 4;
-                    }
-
-                    out.push({
-                        begin: begin,
-                        end: end,
-                        words: parsed.words,
-                        text: parsed.text,
-                        trans: parsed.trans,
-                        roman: parsed.roman,
-                    });
-                    lastEnd = end;
-                }
-                out.sort(function (a, b) { return a.begin - b.begin; });
-                return out;
+        function useTtml(text, label) {
+            try {
+                const n = render(text)
+                if (n) say(label + '：解析出 ' + n + ' 行。', 'ok')
+            } catch (e) {
+                say('解析失败：' + (e && e.message ? e.message : e), 'err')
             }
-
-            /* ---------- 渲染 ---------- */
-            function render(parsed) {
-                lines = parsed;
-                nodes = [];
-                activeIdx = -1;
-                linesBox.innerHTML = '';
-
-                if (!lines.length) {
-                    linesBox.innerHTML = '<div class="empty">这份 TTML 里没有解析到歌词行</div>';
-                    duration = 0;
-                    t = 0;
-                    setEnabled(false);
-                    updateClock();
-                    return;
-                }
-
-                duration = lines[lines.length - 1].end || 0;
-                t = 0;
-
-                lines.forEach(function (ln, i) {
-                    var el = document.createElement('div');
-                    el.className = 'line';
-                    el.dataset.i = i;
-
-                    var main = document.createElement('div');
-                    main.className = 'main';
-                    ln.words.forEach(function (w) {
-                        var s = document.createElement('span');
-                        s.className = 'w' + (w.bg ? ' bg' : '');
-                        s.style.setProperty('--p', '0');
-                        s.textContent = w.text;
-                        main.appendChild(s);
-                    });
-                    el.appendChild(main);
-
-                    if (ln.trans) {
-                        var tr = document.createElement('div');
-                        tr.className = 'trans';
-                        tr.textContent = ln.trans;
-                        el.appendChild(tr);
-                    }
-                    if (ln.roman) {
-                        var ro = document.createElement('div');
-                        ro.className = 'roman';
-                        ro.textContent = ln.roman;
-                        el.appendChild(ro);
-                    }
-
-                    el.addEventListener('click', function () {
-                        seekTo(ln.begin + 0.001);
-                    });
-
-                    linesBox.appendChild(el);
-                    nodes.push(el);
-                });
-
-                // 先全部置 0，等第一次 update 再点亮
-                setEnabled(true);
-                seekTo(0);
-                say('已加载 ' + lines.length + ' 行，总长 ' + fmt(duration).slice(3) + '，点播放开始预览。', 'ok');
+        }
+        $('usePasted').addEventListener('click', () => {
+            const text = $('ttmlText').value
+            if (!text.trim()) return say('先把 TTML 粘进文本框。', 'err')
+            useTtml(text, '粘贴的内容')
+        })
+        $('ttmlFile').addEventListener('change', function () {
+            const f = this.files && this.files[0]
+            if (!f) return
+            const reader = new FileReader()
+            reader.onload = () => {
+                const text = String(reader.result || '')
+                $('ttmlText').value = text
+                $('pasteWrap').hidden = false
+                useTtml(text, f.name)
             }
+            reader.onerror = () => say('读文件失败', 'err')
+            reader.readAsText(f, 'utf-8')
+        })
 
-            function setEnabled(on) {
-                playBtn.disabled = !on;
-                resetBtn.disabled = !on;
-                seek.disabled = !on;
+        window.addEventListener('resize', () => {
+            if (player && typeof player.onResize === 'function') player.onResize()
+        })
+
+        /* ---------- 启动 ---------- */
+        ;(async () => {
+            say('正在加载 AMLL 播放器…')
+            try {
+                const core = await importFirst(CORE_CDNS)
+                const ttmlMod = await importFirst(TTML_CDNS)
+                Player = core.DomLyricPlayer
+                parseTTML = ttmlMod.parseTTML
+                if (!Player || !parseTTML) throw new Error('AMLL 导出不完整')
+                say('AMLL 已就绪。按 id 读取，或粘贴 TTML。')
+            } catch (e) {
+                say('无法加载 AMLL 播放器（CDN 不可达）：' + (e && e.message ? e.message : e) +
+                    '。这个预览页依赖 esm.sh 加载 AMLL。', 'err')
+                return
             }
-
-            /** 更新某一行的逐字进度 */
-            function paintLine(idx, time) {
-                var ln = lines[idx];
-                var el = nodes[idx];
-                if (!ln || !el) return;
-                var spans = el.querySelectorAll('.main .w');
-                for (var i = 0; i < spans.length; i++) {
-                    var w = ln.words[i];
-                    var p = 0;
-                    if (w) {
-                        if (time >= w.end) p = 1;
-                        else if (time > w.begin) {
-                            p = (time - w.begin) / Math.max(0.001, w.end - w.begin);
-                        }
-                    }
-                    spans[i].style.setProperty('--p', p.toFixed(3));
-                }
+            const id = new URLSearchParams(location.search).get('id')
+            if (id && /^\d+$/.test(id)) {
+                $('songId').value = id
+                $('loadBtn').click()
             }
-
-            /** 找出当前行：最后一条 begin <= time 的 */
-            function findActive(time) {
-                var lo = 0;
-                var hi = lines.length - 1;
-                var ans = -1;
-                while (lo <= hi) {
-                    var mid = (lo + hi) >> 1;
-                    if (lines[mid].begin <= time) {
-                        ans = mid;
-                        lo = mid + 1;
-                    } else {
-                        hi = mid - 1;
-                    }
-                }
-                return ans;
-            }
-
-            function centerOn(idx) {
-                var el = nodes[idx];
-                if (!el) return;
-                var stageH = linesBox.parentElement.clientHeight;
-                var offset = el.offsetTop + el.offsetHeight / 2 - stageH / 2;
-                linesBox.style.transform = 'translateY(' + (-offset) + 'px)';
-            }
-
-            function update() {
-                updateClock();
-                if (!lines.length) return;
-
-                var idx = findActive(t);
-                if (idx !== activeIdx) {
-                    // 旧行补满，新行接管
-                    if (activeIdx >= 0 && nodes[activeIdx]) {
-                        paintLine(activeIdx, lines[activeIdx].end);
-                        nodes[activeIdx].classList.remove('on');
-                    }
-                    activeIdx = idx;
-                    if (idx >= 0) {
-                        nodes[idx].classList.add('on');
-                        centerOn(idx);
-                    }
-                }
-                if (idx >= 0) paintLine(idx, t);
-
-                // 把非当前行的进度收干净（避免来回拖时残影）
-                for (var i = 0; i < lines.length; i++) {
-                    if (i === idx) continue;
-                    var full = lines[i].end <= t;
-                    var el = nodes[i];
-                    if (!el) continue;
-                    var spans = el.querySelectorAll('.main .w');
-                    for (var k = 0; k < spans.length; k++) {
-                        spans[k].style.setProperty('--p', full ? '1' : '0');
-                    }
-                }
-            }
-
-            function updateClock() {
-                clock.textContent = fmt(t) + ' / ' + fmt(duration);
-                if (duration > 0) {
-                    seek.value = String(Math.round((t / duration) * 1000));
-                } else {
-                    seek.value = '0';
-                }
-            }
-
-            function seekTo(sec) {
-                t = Math.max(0, Math.min(sec, duration || 0));
-                activeIdx = -1;   // 强制重算高亮与滚动
-                update();
-            }
-
-            /* ---------- 播放循环 ---------- */
-            function loop(ts) {
-                if (!playing) return;
-                if (!lastTs) lastTs = ts;
-                var dt = (ts - lastTs) / 1000;
-                lastTs = ts;
-                t += dt;
-                if (t >= duration) {
-                    t = duration;
-                    update();
-                    pause();
-                    return;
-                }
-                update();
-                rafId = requestAnimationFrame(loop);
-            }
-
-            function play() {
-                if (!lines.length) return;
-                if (t >= duration) t = 0;
-                playing = true;
-                lastTs = 0;
-                playBtn.textContent = '⏸ 暂停';
-                rafId = requestAnimationFrame(loop);
-            }
-            function pause() {
-                playing = false;
-                if (rafId) cancelAnimationFrame(rafId);
-                rafId = null;
-                playBtn.textContent = '▶ 播放';
-            }
-
-            playBtn.addEventListener('click', function () {
-                playing ? pause() : play();
-            });
-            resetBtn.addEventListener('click', function () {
-                pause();
-                seekTo(0);
-                play();
-            });
-            seek.addEventListener('input', function () {
-                pause();
-                seekTo((Number(seek.value) / 1000) * duration);
-            });
-
-            /* ---------- 数据来源 ---------- */
-            $('loadBtn').addEventListener('click', function () {
-                var id = $('songId').value.replace(/\D/g, '');
-                $('songId').value = id;
-                if (!id) { say('先填一个歌曲 id。', 'err'); return; }
-                var btn = this;
-                btn.disabled = true;
-                say('读取中…');
-                fetch('/search?ttml=' + id + '&_=' + Date.now())
-                    .then(function (r) { return r.json(); })
-                    .then(function (j) {
-                        btn.disabled = false;
-                        if (j.code !== 200 || !j.ttml) {
-                            say((j.msg || '读取失败') + '（HTTP ' + j.code + '）', 'err');
-                            return;
-                        }
-                        pause();
-                        render(parseTtml(j.ttml));
-                    })
-                    .catch(function (e) {
-                        btn.disabled = false;
-                        say('请求失败：' + (e && e.message ? e.message : e), 'err');
-                    });
-            });
-            $('songId').addEventListener('input', function () {
-                this.value = this.value.replace(/\D/g, '').slice(0, 20);
-            });
-
-            $('pasteToggle').addEventListener('click', function () {
-                var w = $('pasteWrap');
-                w.hidden = !w.hidden;
-                if (!w.hidden) $('ttmlText').focus();
-            });
-
-            function useTtml(text, label) {
-                pause();
-                var parsed = parseTtml(text);
-                render(parsed);
-                if (label) say(label + '：解析出 ' + parsed.length + ' 行。', parsed.length ? 'ok' : 'err');
-            }
-
-            $('usePasted').addEventListener('click', function () {
-                var text = $('ttmlText').value;
-                if (!text.trim()) { say('先把 TTML 粘进文本框。', 'err'); return; }
-                useTtml(text, '粘贴的内容');
-            });
-
-            $('ttmlFile').addEventListener('change', function () {
-                var f = this.files && this.files[0];
-                if (!f) return;
-                var reader = new FileReader();
-                reader.onload = function () {
-                    var text = String(reader.result || '');
-                    $('ttmlText').value = text;
-                    $('pasteWrap').hidden = false;
-                    useTtml(text, f.name);
-                };
-                reader.onerror = function () { say('读文件失败', 'err'); };
-                reader.readAsText(f, 'utf-8');
-            });
-
-            window.addEventListener('resize', function () {
-                if (activeIdx >= 0) centerOn(activeIdx);
-            });
-
-            /* 启动：地址栏带 ?id=186016 就直接加载 */
-            (function boot() {
-                var id = (new URLSearchParams(location.search)).get('id');
-                if (id && /^\d+$/.test(id)) {
-                    $('songId').value = id;
-                    $('loadBtn').click();
-                }
-            })();
-        })();
+        })()
     </script>
 </body>
 </html>
