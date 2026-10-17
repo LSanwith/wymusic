@@ -129,6 +129,23 @@
         .hint.ok { color: var(--ok); }
         .hint.err { color: var(--err); }
 
+        /* 审核规则清单 */
+        .rules {
+            margin: 8px 0 0;
+            padding-left: 20px;
+            color: var(--muted);
+            font-size: 12.5px;
+            line-height: 1.75;
+        }
+        .rules li { margin: 2px 0; }
+        .rules b { color: var(--fg); font-weight: 500; }
+        .rules code {
+            padding: 1px 5px;
+            background: rgba(0, 0, 0, 0.35);
+            border-radius: 5px;
+            font-size: 12px;
+        }
+
         .label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
         .label:first-child { margin-top: 0; }
 
@@ -214,7 +231,7 @@
     <main class="container">
         <header class="site-header">
             <h1>TTML 歌词上传</h1>
-            <p class="sub">上传歌词 · AI 审核 · 通过后可直接按歌曲 id 读取</p>
+            <p class="sub">上传歌词 · 脚本审核 · 通过后可直接按歌曲 id 读取</p>
         </header>
 
         <div id="notice" class="block" hidden>
@@ -238,8 +255,21 @@
             </div>
 
             <div class="hint">
-                这两项都是必填。提交后先做本地结构检查，再交 AI 判断「歌词是否真属于这些歌」，
-                两道都通过才会入库。入库后可以按 id 读取：<code>/search?ttml=&lt;id&gt;</code>
+                这两项都是必填。<b>审核全部由脚本完成，不调用任何 AI</b>，
+                所以很快也不花 token。任一条件不满足就拒绝：
+            </div>
+            <ul class="rules">
+                <li>必须有 <code>&lt;tt&gt;</code> 根节点且闭合，体积不超过 256KB</li>
+                <li>每行 <code>&lt;p&gt;</code> 都要有 <code>begin</code> 和 <code>end</code>，且 end 晚于 begin</li>
+                <li>时间轴必须严格递增，不能有空行</li>
+                <li>有效歌词至少 8 行（最多 4000 行）</li>
+                <li>歌词跨度要覆盖歌曲时长的 50%~115%，太短算不完整</li>
+                <li>行内文本不能高度重复（同一句刷满全部行会被拒）</li>
+                <li><b>与这首歌的官方歌词字面重合率 ≥ 70%</b>，且<b>每个 id 都要各自满足</b></li>
+                <li>该曲必须有官方歌词 —— 纯音乐、暂无歌词一律拒绝</li>
+            </ul>
+            <div class="hint">
+                通过后可以按 id 读取：<code>/search?ttml=&lt;id&gt;</code>
             </div>
 
             <div class="row" style="margin-top:14px">
@@ -396,7 +426,7 @@
                 if (!ids.length) { btn.disabled = false; setResult('至少要填一个网易云歌曲 id。', 'err'); return; }
 
                 btn.disabled = true;
-                setResult('提交中：先做结构检查，再交 AI 审核（可能要十几秒）…', '');
+                setResult('提交中：脚本审核中（结构检查 + 官方歌词比对）…', '');
                 resultBody.innerHTML = '';
 
                 submitOnce(ttml, ids)

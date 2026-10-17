@@ -1,4 +1,4 @@
-// TTML 歌词提交 + AI 审核 + 入库
+// TTML 歌词提交 + 脚本审核 + 入库
 //
 //   POST /ttml/submit
 //   body 或 query：{ ttml, ids, pass }
@@ -6,11 +6,9 @@
 //     ids   必填，对应的网易云歌曲 id，可多个（数组或逗号分隔，最多 8 个）
 //     pass  人机验证通行证（见 plugins/filePass.js）
 //
-// 流程（顺序即省钱顺序）：
-//   1. 结构检查 —— 本地做，0 token
-//   2. 查歌曲名/歌手/时长 —— 给审核当对照
-//   3. AI 语义审核 —— 只把摘要发过去，约 300 token
-//   4. 通过才写 Blob，按 id 各存一份
+// 审核是纯脚本，不调用 AI（0 token），规则见 plugins/ttmlReview.js：
+//   结构那一套（行数、时间轴、完整性）+ 与官方歌词的字面重合率。
+// 关键约束：**每一个 id 的歌都必须和歌词对得上**，有一个过不了就整体拒。
 const createOption = require('../util/option.js')
 const { guard } = require('../plugins/filePass.js')
 const store = require('../plugins/ttmlStore.js')
@@ -24,7 +22,7 @@ function parseIds(raw) {
   return [...new Set(list.map((s) => String(s).trim()).filter(Boolean))]
 }
 
-/** 查歌曲详情，拿歌名/歌手/专辑/时长给审核用 */
+/** 查歌曲详情，拿歌名/歌手/专辑/时长 */
 async function fetchSongs(ids, query, request) {
   const data = {
     c: '[' + ids.map((id) => '{"id":' + Number(id) + '}').join(',') + ']',
@@ -44,8 +42,16 @@ async function fetchSongs(ids, query, request) {
   }))
 }
 
+/** 取官方歌词（LRC 原文） */
+async function fetchLyric(id, query, request) {
+  const data = { id, tv: -1, lv: -1, rv: -1, kv: -1, _nmclfl: 1 }
+  const resp = await request('/api/song/lyric', data, createOption(query))
+  const body = (resp && resp.body) || {}
+  return String((body.lrc && body.lrc.lyric) || '')
+}
+
 module.exports = async (query, request) => {
-  // 这个接口每调一次都要花 AI 的钱，必须挂人机验证
+  // 这个接口要调网易云接口、还要写 Blob，必须挂人机验证
   const denied = guard(query)
   if (denied) return denied
 
@@ -71,12 +77,12 @@ module.exports = async (query, request) => {
       body: { code: 400, msg: 'ids 必填：填这首歌对应的网易云 id' },
     }
   }
-  if (ids.length > review.MAX_AI_IDS) {
+  if (ids.length > review.MAX_IDS) {
     return {
       status: 400,
       body: {
         code: 400,
-        msg: `一次最多 ${review.MAX_AI_IDS} 个 id，当前 ${ids.length} 个`,
+        msg: `一次最多 ${review.MAX_IDS} 个 id，当前 ${ids.length} 个`,
       },
     }
   }
@@ -91,7 +97,7 @@ module.exports = async (query, request) => {
     }
   }
 
-  // 1) 先查歌，后面结构检查要用时长
+  // 1) 查歌
   let songs = []
   try {
     songs = await fetchSongs(ids, query, request)
@@ -110,9 +116,10 @@ module.exports = async (query, request) => {
     }
   }
 
-  // 2) 结构检查（不花钱）
+  // 2) 结构检查。多首歌时长可能不同，用最短的那首当基准（最严）
   const durations = songs.map((s) => s.durationSec).filter(Boolean)
-  const structural = review.structuralCheck(ttml, durations)
+  const baseDur = durations.length ? Math.min(...durations) : null
+  const structural = review.structuralCheck(ttml, baseDur)
   if (!structural.ok) {
     return {
       status: 400,
@@ -120,24 +127,56 @@ module.exports = async (query, request) => {
         code: 400,
         msg: 'TTML 结构不合格',
         problems: structural.problems,
-        digest: structural.digest,
-        tokens: 0,
+        digest: pickDigest(structural.digest),
       },
     }
   }
 
-  // 3) AI 语义审核（花钱，但只发摘要）
-  const ai = await review.aiCheck(songs, structural.digest)
-  if (!ai.ok) {
+  // 3) 逐 id 与官方歌词比对，每个都必须过
+  const checks = []
+  for (const s of songs) {
+    let lrc = ''
+    try {
+      lrc = await fetchLyric(s.id, query, request)
+    } catch {
+      lrc = ''
+    }
+    if (!review.lyricUsable(lrc)) {
+      checks.push({
+        id: String(s.id),
+        name: s.name,
+        ok: false,
+        reason: '这首歌没有可用的官方歌词，无法核对（纯音乐或暂无歌词）',
+      })
+      continue
+    }
+    const cmp = review.contentRatio(
+      structural.digest.text,
+      review.lrcTextOf(lrc),
+    )
+    checks.push({
+      id: String(s.id),
+      name: s.name,
+      ok: cmp.ok,
+      ratio: cmp.ratio,
+      threshold: cmp.threshold,
+      reason: cmp.ok
+        ? `与官方歌词重合 ${(cmp.ratio * 100).toFixed(1)}%`
+        : `与官方歌词只重合 ${(cmp.ratio * 100).toFixed(1)}%，` +
+          `低于 ${(cmp.threshold * 100).toFixed(0)}%，不像是这首歌的歌词`,
+    })
+  }
+
+  const failed = checks.filter((c) => !c.ok)
+  if (failed.length) {
     return {
       status: 422,
       body: {
         code: 422,
-        msg: 'AI 审核未通过',
-        why: ai.why,
-        songs: songs.map((s) => s.name + ' / ' + s.artists.join(',')),
-        digest: structural.digest,
-        tokens: ai.tokens || 0,
+        msg: '脚本审核未通过',
+        why: failed.map((f) => `${f.name}：${f.reason}`).join('；'),
+        checks,
+        digest: pickDigest(structural.digest),
       },
     }
   }
@@ -164,11 +203,20 @@ module.exports = async (query, request) => {
       ids,
       saved,
       review: {
-        verdict: ai.skipped ? '结构检查通过（AI 审核未启用）' : 'AI 审核通过',
-        why: ai.why,
-        tokens: ai.tokens || 0,
+        verdict: '脚本审核通过',
+        checks,
+        // 纯脚本审核，不花任何 token
+        tokens: 0,
       },
-      digest: structural.digest,
+      digest: pickDigest(structural.digest),
     },
   }
+}
+
+/** 回给客户端的摘要里不要带整份歌词文本 */
+function pickDigest(d) {
+  if (!d) return null
+  const out = Object.assign({}, d)
+  delete out.text
+  return out
 }

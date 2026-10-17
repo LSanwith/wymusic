@@ -1,15 +1,28 @@
-// TTML 审核
+// TTML 审核：纯脚本，不调用任何 AI
 //
-// 分两段，目的就是省 token：
-//   1. 结构检查（本地做，0 token）：能不能解析、有多少行、时间轴是否递增、
-//      有没有空行、时长是否离谱
-//   2. 语义检查（花钱，才交 AI）：歌词内容是否真对应这几首歌
+// 为什么不用 AI：一首歌的 TTML 动辄几千字，整份塞给模型既贵又慢；
+// 而且「歌词对不对得上」本来就是可判定的事，不需要判断力。
+// 现在拿网易云自己的官方歌词当基准做比对，比让模型「感觉一下」更严、更稳，
+// 且 0 token。
 //
-// 交给 AI 的不是整份 TTML，而是上面算好的摘要：行数、时长、开头几行、结尾几行。
-// 一首歌的 TTML 动辄几千字，全发过去一次就上千 token；发摘要通常 300 以内。
+// 规则（都是硬的，任一不过就拒）：
+//   1. 体积 ≤ 256KB，必须有 <tt> 根节点且闭合
+//   2. 每行 <p> 都必须同时有 begin 和 end，且 end > begin
+//   3. 时间轴严格递增
+//   4. 行数 ≥ 8、≤ 4000；不能有空行
+//   5. 歌词跨度必须覆盖歌曲时长的 50%~115%（不完整直接拒）
+//   6. 行内文本重复率不能过高（同一句刷满全部行）
+//   7. 与官方歌词的 4-gram 重合率 ≥ 70%，且对【每个】id 都要成立
+//   8. 该曲必须有官方歌词（纯音乐、无歌词一律拒）
 const MAX_TTML_BYTES = 256 * 1024
-const MAX_AI_IDS = 8
-const MIN_LINES = 4 // 少于 4 行基本不可能是完整歌词
+const MIN_LINES = 8
+const MAX_LINES = 4000
+const MIN_NGRAM_RATIO = 0.7
+const DURATION_MIN_RATIO = 0.5
+const DURATION_MAX_RATIO = 1.15
+const MIN_UNIQUE_RATIO = 0.3
+const MAX_IDS = 8
+const NGRAM = 4
 
 /** 把 TTML 里的时间写成秒。支持 mm:ss.mmm、hh:mm:ss.mmm、纯秒数 */
 function toSec(v) {
@@ -39,17 +52,14 @@ function textOf(fragment) {
     .trim()
 }
 
-/**
- * 解析成摘要。不追求完整 TTML 规范，只要够判断「是不是一份像样的歌词」。
- * 返回 { ok, problems, digest }
- */
+/** 解析成摘要 + 问题列表 */
 function parse(ttml) {
   const src = String(ttml || '')
   const problems = []
 
-  if (!src.trim()) return { ok: false, problems: ['TTML 是空的'], digest: null }
+  if (!src.trim()) return { problems: ['TTML 是空的'], digest: null }
   if (Buffer.byteLength(src, 'utf8') > MAX_TTML_BYTES) {
-    return { ok: false, problems: ['TTML 太大（超过 256KB）'], digest: null }
+    return { problems: ['TTML 太大（超过 256KB）'], digest: null }
   }
 
   const hasTt = /<tt[\s>]/i.test(src)
@@ -59,11 +69,14 @@ function parse(ttml) {
 
   const blocks = [...src.matchAll(/<p\b([^>]*)>([\s\S]*?)<\/p>/gi)]
   const lines = []
+  const textSet = new Set()
   let beginFirst = null
   let endLast = null
   let monotonic = true
   let prevBegin = -Infinity
   let emptyLines = 0
+  let missingTiming = 0
+  let badRange = 0
 
   for (const b of blocks) {
     const attrs = b[1] || ''
@@ -72,27 +85,24 @@ function parse(ttml) {
     const em = attrs.match(/\bend\s*=\s*"([^"]*)"/i)
     const begin = bm ? toSec(bm[1]) : null
     const end = em ? toSec(em[1]) : null
+
+    if (begin == null || end == null) missingTiming++
+    if (begin != null && end != null && end <= begin) badRange++
+
     if (begin != null) {
       if (begin < prevBegin) monotonic = false
       prevBegin = begin
       if (beginFirst == null) beginFirst = begin
     }
     if (end != null) endLast = end
+
     if (!text) emptyLines++
-    else lines.push(text)
+    else {
+      lines.push(text)
+      textSet.add(text)
+    }
   }
 
-  if (!blocks.length) problems.push('没有任何 <p> 歌词行')
-  if (lines.length && lines.length < MIN_LINES) {
-    problems.push(`歌词只有 ${lines.length} 行，太短，疑似不完整`)
-  }
-  if (emptyLines > blocks.length * 0.5 && blocks.length > 0) {
-    problems.push('超过一半的歌词行没有文字')
-  }
-  if (!monotonic) problems.push('时间轴不是递增的，可能是拼错的')
-  if (beginFirst == null) problems.push('歌词行没有 begin 时间戳')
-
-  const chars = lines.reduce((n, s) => n + s.length, 0)
   const durationSec =
     beginFirst != null && endLast != null && endLast > beginFirst
       ? Math.round(endLast - beginFirst)
@@ -102,157 +112,132 @@ function parse(ttml) {
     lineCount: lines.length,
     blockCount: blocks.length,
     emptyLines,
-    chars,
-    durationSec,
+    missingTiming,
+    badRange,
     monotonic,
-    // 只留头尾，给 AI 用，省 token
+    chars: lines.reduce((n, s) => n + s.length, 0),
+    durationSec,
+    uniqueRatio: lines.length ? textSet.size / lines.length : 0,
     head: lines.slice(0, 6),
     tail: lines.length > 6 ? lines.slice(-3) : [],
+    // 全文拼在一起，供与官方歌词比对
+    text: lines.join('\n'),
   }
 
-  return { ok: problems.length === 0, problems, digest }
+  return { problems, digest }
 }
 
-/** 结构检查 + 与歌曲时长对照（网易云详情的 dt 是毫秒） */
-function structuralCheck(ttml, songDurationsSec) {
-  const parsed = parse(ttml)
-  const problems = parsed.problems.slice()
-  const d = parsed.digest
+/** 结构检查（严） */
+function structuralCheck(ttml, songDurSec) {
+  const { problems, digest: d } = parse(ttml)
+  const out = problems.slice()
 
-  if (d && d.durationSec && songDurationsSec.length) {
-    // 歌词跨度与歌长差太多也可疑（TTML 允许只覆盖一段，所以只提示不拦）
-    const min = Math.min(...songDurationsSec)
-    if (d.durationSec > min + 60) {
-      problems.push(
-        `歌词时长 ${d.durationSec}s 明显超过歌曲时长 ${min}s，可能是错配`,
-      )
+  if (d) {
+    if (d.blockCount === 0) out.push('没有任何 <p> 歌词行')
+    if (d.lineCount < MIN_LINES) {
+      out.push(`有效歌词只有 ${d.lineCount} 行，少于 ${MIN_LINES} 行，不完整`)
+    }
+    if (d.lineCount > MAX_LINES) out.push(`歌词行数 ${d.lineCount} 异常`)
+    if (d.emptyLines > 0) out.push(`有 ${d.emptyLines} 行是空的`)
+    if (d.missingTiming > 0) {
+      out.push(`有 ${d.missingTiming} 行缺少 begin 或 end 时间戳`)
+    }
+    if (d.badRange > 0) out.push(`有 ${d.badRange} 行的 end 不晚于 begin`)
+    if (!d.monotonic) out.push('时间轴不是递增的')
+    if (d.uniqueRatio < MIN_UNIQUE_RATIO) {
+      out.push('行内文本重复率过高，疑似刷行')
+    }
+
+    if (songDurSec) {
+      const span = d.durationSec
+      if (span == null) {
+        out.push('算不出歌词总时长，无法核对完整性')
+      } else if (span < songDurSec * DURATION_MIN_RATIO) {
+        out.push(
+          `歌词只覆盖 ${span}s，不到歌曲时长 ${songDurSec}s 的一半，不完整`,
+        )
+      } else if (span > songDurSec * DURATION_MAX_RATIO) {
+        out.push(`歌词跨度 ${span}s 超过歌曲时长 ${songDurSec}s 太多`)
+      }
     }
   }
 
-  // 时长异常短（<10s）且行数少，视为不完整
-  if (d && d.durationSec != null && d.durationSec < 10) {
-    problems.push('歌词总时长不到 10 秒，疑似不完整')
-  }
+  return { ok: out.length === 0, problems: out, digest: d }
+}
 
-  return { ok: problems.length === 0, problems, digest: d }
+/** 归一化：只留字母与数字（含中文），去掉标点与空白 */
+function normalize(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+}
+
+/** 取 n-gram 集合 */
+function grams(s, n) {
+  const set = new Set()
+  if (!s) return set
+  if (s.length <= n) {
+    set.add(s)
+    return set
+  }
+  for (let i = 0; i + n <= s.length; i++) set.add(s.slice(i, i + n))
+  return set
 }
 
 /**
- * 交给 DeepSeek 判断「歌词内容是否对应这几首歌」。
- * 返回 { ok, why, skipped?, tokens? }
+ * TTML 文本与官方歌词的重合率。
+ * 用 4-gram 而不是逐行比对：TTML 可能把一行拆成逐字/逐词（Apple 那种），
+ * 逐行对不上，但字面内容的重合度依然准确。
+ *
+ * 返回 { ratio, threshold, ok, ttmlGrams, hit }
  */
-async function aiCheck(songs, digest) {
-  const key = process.env.DEEPSEEK_API_KEY
-  if (!key) {
-    return {
-      ok: true,
-      skipped: true,
-      why: '未配置 DEEPSEEK_API_KEY，只做了结构检查',
-    }
+function contentRatio(ttmlText, officialText) {
+  const a = normalize(ttmlText)
+  const b = normalize(officialText)
+  if (!a || !b)
+    return { ratio: 0, threshold: MIN_NGRAM_RATIO, ok: false, hit: 0, total: 0 }
+  const bg = grams(b, NGRAM)
+  const ag = grams(a, NGRAM)
+  if (!ag.size)
+    return { ratio: 0, threshold: MIN_NGRAM_RATIO, ok: false, hit: 0, total: 0 }
+  let hit = 0
+  for (const g of ag) if (bg.has(g)) hit++
+  const ratio = hit / ag.size
+  return {
+    ratio: Math.round(ratio * 1000) / 1000,
+    threshold: MIN_NGRAM_RATIO,
+    ok: ratio >= MIN_NGRAM_RATIO,
+    hit,
+    total: ag.size,
   }
-  if (!digest) return { ok: false, why: '没有可审核的歌词摘要' }
+}
 
-  const picked = songs.slice(0, MAX_AI_IDS).map((s) => ({
-    name: s.name,
-    artist: (s.artists || []).join(' / '),
-    album: s.album || '',
-  }))
+/** 从 LRC 原文里剥掉 [mm:ss.xx] 这类时间标签，只留可读歌词 */
+function lrcTextOf(lrc) {
+  return String(lrc || '')
+    .split('\n')
+    .map((l) => l.replace(/\[[^\]]*\]/g, '').trim())
+    .filter(Boolean)
+    .join('\n')
+}
 
-  // 提示词尽量短，但「必须全部相符」这条不能省：
-  // 一个 TTML 可能挂多个 id（同曲不同版本 / 不同专辑），
-  // 只要有一个 id 的歌对不上就不该入库。
-  // 早先写法只说「判断是否属于给定歌曲」，模型会只核对其中一首就放行。
-  const system =
-    '你是歌词审核员。给定一组歌曲和一段歌词，判断这段歌词是否属于【每一首】。' +
-    '必须全部相符才通过；只要有一首对不上就不通过，并在理由里指出是哪首。' +
-    '只输出一行 JSON：{"ok":1或0,"why":"不超过20字的中文理由"}，不要任何其它文字。'
-
-  const user = JSON.stringify({
-    songCount: picked.length,
-    mustMatchAll: true,
-    songs: picked,
-    lyric: {
-      lines: digest.lineCount,
-      seconds: digest.durationSec,
-      head: digest.head,
-      tail: digest.tail,
-    },
-  })
-
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 20000)
-  try {
-    const res = await fetch('https://api.deepseek.com/chat/completions', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: 'Bearer ' + key,
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-        // 只需要一行 JSON，给多了纯浪费
-        max_tokens: 120,
-        temperature: 0,
-        stream: false,
-      }),
-      signal: controller.signal,
-    })
-    if (!res.ok) {
-      const t = await res.text()
-      return { ok: false, why: `审核服务返回 ${res.status}：${t.slice(0, 80)}` }
-    }
-    const data = await res.json()
-    const text = String(
-      (data.choices && data.choices[0] && data.choices[0].message
-        ? data.choices[0].message.content
-        : '') || '',
-    )
-    const usage = data.usage || {}
-
-    // 模型偶尔会包 ```json 或加说明，宽进
-    const m = text.match(/\{[\s\S]*\}/)
-    if (!m) {
-      return {
-        ok: false,
-        why: '审核返回无法解析：' + text.slice(0, 60),
-        tokens: usage.total_tokens,
-      }
-    }
-    let verdict
-    try {
-      verdict = JSON.parse(m[0])
-    } catch {
-      return {
-        ok: false,
-        why: '审核返回不是合法 JSON',
-        tokens: usage.total_tokens,
-      }
-    }
-    const ok = verdict.ok === 1 || verdict.ok === true || verdict.ok === '1'
-    return {
-      ok,
-      why: String(verdict.why || '').slice(0, 60),
-      tokens: usage.total_tokens,
-      model: data.model || 'deepseek-chat',
-    }
-  } catch (e) {
-    const msg =
-      e && e.name === 'AbortError' ? '审核超时' : e.message || String(e)
-    return { ok: false, why: msg }
-  } finally {
-    clearTimeout(timer)
-  }
+/** 官方歌词是否可用（有的歌是纯音乐，lrc 为空或只有一句提示） */
+function lyricUsable(lrc) {
+  const t = lrcTextOf(lrc)
+  if (!t) return false
+  if (/纯音乐|请欣赏|暂无歌词|没有歌词|no lyrics/i.test(t)) return false
+  return normalize(t).length >= 20
 }
 
 module.exports = {
   MAX_TTML_BYTES,
-  MAX_AI_IDS,
   MIN_LINES,
+  MIN_NGRAM_RATIO,
+  MAX_IDS,
   parse,
   structuralCheck,
-  aiCheck,
+  contentRatio,
+  lrcTextOf,
+  lyricUsable,
+  normalize,
 }
