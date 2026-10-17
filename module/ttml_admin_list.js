@@ -1,4 +1,4 @@
-// /ttml/admin —— 后台：列出所有已上传的 TTML 及其绑定的歌曲 id
+// /ttml/admin/list —— 管理页：列出所有已上传的 TTML 及其绑定的歌曲 id
 //
 // 只读，但内容和绑定关系全都在这里，所以照样过人机验证。
 const store = require('../plugins/ttmlStore.js')

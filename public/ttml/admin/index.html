@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="/docs/netease.png">
-    <title>TTML 后台 · Sanwith</title>
+    <title>TTML 管理 · Sanwith</title>
     <link rel="stylesheet" href="/nav.css">
     <style>
         :root {
@@ -84,7 +84,7 @@
             <a href="/">音乐界面</a>
             <a href="/file/">文件挂载代理</a>
             <a href="/ttml/">TTML 歌词</a>
-            <a href="/ttml/admin/" class="active">TTML 后台</a>
+            <a href="/ttml/admin/" class="active">TTML 管理</a>
         </div>
         <span class="nav-brand">
             <a href="https://github.com/neteasecloudmusicapianhanced/api-enhanced" target="_blank" rel="noopener">GitHub</a>
@@ -95,7 +95,7 @@
 
     <main class="container">
         <header class="site-header">
-            <h1>TTML 后台</h1>
+            <h1>TTML 管理</h1>
             <p class="sub">所有已上传的 TTML 与其绑定的歌曲 id；删除会真删 Blob 内容并自动解绑全部 id</p>
         </header>
 
@@ -206,13 +206,13 @@
                     var acts = document.createElement('div');
                     acts.className = 'row';
                     acts.style.gap = '8px';
-                    if (it.api) {
+                    if (it.ids.length) {
                         var a = document.createElement('a');
                         a.className = 'hint';
-                        a.href = it.url;
+                        a.href = '/ttml/preview/?id=' + encodeURIComponent(it.ids[0]);
                         a.target = '_blank';
                         a.rel = 'noopener';
-                        a.textContent = '下载';
+                        a.textContent = '预览';
                         acts.appendChild(a);
                     }
                     var del = document.createElement('button');
@@ -275,10 +275,10 @@
                     acts.style.gap = '8px';
                     var a = document.createElement('a');
                     a.className = 'hint';
-                    a.href = it.url;
+                    a.href = '/ttml/preview/?id=' + encodeURIComponent(it.songId);
                     a.target = '_blank';
                     a.rel = 'noopener';
-                    a.textContent = '下载';
+                    a.textContent = '预览';
                     acts.appendChild(a);
                     var del = document.createElement('button');
                     del.type = 'button';
