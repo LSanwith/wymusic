@@ -172,6 +172,7 @@
             color: rgba(255, 255, 255, 0.42);
         }
         .line.on .sub { color: rgba(255, 255, 255, 0.68); }
+        .links { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 14px; font-size: 13px; }
         a { color: #9ecbff; }
     </style>
 </head>
@@ -250,6 +251,10 @@ if (data.code === 200) console.log(data.ttml);
                 <span class="hint" id="playInfo" style="margin:0">用时间轴模拟播放，高亮当前行</span>
             </div>
             <div id="lines"></div>
+            <div class="links">
+                <a href="/ttml/">上传 TTML →</a>
+                <a href="/ttml/preview/">歌词预览 →</a>
+            </div>
         </section>
     </main>
 
