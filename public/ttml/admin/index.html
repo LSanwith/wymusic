@@ -131,6 +131,9 @@
             var $ = function (id) { return document.getElementById(id); };
             var info = $('info');
             var pending = null;   // 两步确认：记住要点哪个
+            // 已确认删掉的（Blob 的 list/head 删除后要几十秒才更新，
+            // 这期间还会把它们列出来。本会话内先自己滤掉，避免看起来像没删掉）
+            var deleted = Object.create(null);
 
             function pass() { try { return localStorage.getItem(PASS_KEY) || ''; } catch (e) { return ''; } }
             function say(t, kind) {
@@ -315,6 +318,7 @@
                         if (needVerify(r)) return;
                         if (r.data && r.data.code === 200) {
                             // 立刻从界面移除：list() 有延迟，等它会看起来像没删掉
+                            deleted[ttmlId] = true;
                             var item = btn.closest ? btn.closest('.item') : null;
                             if (item) item.remove();
                             say(r.data.msg, 'ok');
@@ -341,7 +345,8 @@
                         btn.disabled = false;
                         if (needVerify(r)) return;
                         if (r.data && r.data.code === 200) {
-                            // 立刻从界面移除：list() 有延迟，等它会看起来像没删掉
+                            // 立刻从界面移除：Blob 的 list/head 删除后有延迟
+                            deleted['legacy:' + songId] = true;
                             var item = btn.closest ? btn.closest('.item') : null;
                             if (item) item.remove();
                             say(r.data.msg, 'ok');
@@ -365,19 +370,31 @@
                             say((r.data && r.data.msg) || ('HTTP ' + r.status), 'err');
                             return;
                         }
-                        $('nTotal').textContent = r.data.total;
-                        $('nBind').textContent = r.data.bindingCount;
-                        $('nLegacy').textContent = r.data.legacyCount || 0;
-                        renderList(r.data.items || []);
+                        // 过滤掉本会话里已经删掉的：Blob 的 list/head 删除后要过一会儿才更新
+                        var items = (r.data.items || []).filter(function (it) {
+                            return !deleted[it.ttmlId];
+                        });
+                        var lg = (r.data.legacy || []).filter(function (it) {
+                            return !deleted['legacy:' + it.songId];
+                        });
+                        var bindCount = items.reduce(function (n, it) {
+                            return n + it.ids.length;
+                        }, 0);
+
+                        $('nTotal').textContent = items.length;
+                        $('nBind').textContent = bindCount;
+                        $('nLegacy').textContent = lg.length;
+                        renderList(items);
                         $('listBox').hidden = false;
-                        var lg = r.data.legacy || [];
                         if (lg.length) {
                             renderLegacy(lg);
                             $('legacyBox').hidden = false;
                         } else {
                             $('legacyBox').hidden = true;
                         }
-                        if (!keepMsg) say('共 ' + r.data.total + ' 份 TTML、' + r.data.bindingCount + ' 条绑定。', 'ok');
+                        if (!keepMsg) {
+                            say('共 ' + items.length + ' 份 TTML、' + bindCount + ' 条绑定。', 'ok');
+                        }
                     })
                     .catch(function (e) {
                         say('加载失败：' + (e && e.message ? e.message : e), 'err');
