@@ -385,18 +385,33 @@ async function destroyLegacy(songId) {
   return { songId, deleted: false }
 }
 
-/** 列出所有内容与绑定（后台用） */
+/**
+ * 列出所有内容与绑定（管理页用）。
+ *
+ * list() 是最终一致的：刚删掉的东西可能还会列出来一会儿。
+ * 管理页要真实反映现状，所以每条再用 head() 确认一次 ——
+ * 宁可多发几个请求，也不能让已经删掉的东西一直挂在界面上。
+ */
 async function listAll() {
-  const { list } = require('@vercel/blob')
+  const { list, head } = require('@vercel/blob')
 
-  const contents = []
+  async function alive(pathname) {
+    try {
+      const m = await head(pathname)
+      return !!(m && m.url)
+    } catch {
+      return false
+    }
+  }
+
+  const rawContents = []
   let cursor
   do {
     const page = await list({ prefix: CONTENT_PREFIX, cursor, limit: 200 })
     for (const b of page.blobs || []) {
       const m = /^ttml\/c\/([0-9a-f]{16})\.ttml$/.exec(b.pathname)
       if (m) {
-        contents.push({
+        rawContents.push({
           ttmlId: m[1],
           size: b.size,
           uploadedAt: b.uploadedAt,
@@ -407,22 +422,55 @@ async function listAll() {
     cursor = page.cursor
   } while (cursor)
 
-  const binds = []
+  const rawBinds = []
   cursor = undefined
   do {
     const page = await list({ prefix: BIND_PREFIX, cursor, limit: 500 })
     for (const b of page.blobs || []) {
       const m = /^ttml\/b\/(\d+)--([0-9a-f]{16})\.json$/.exec(b.pathname)
-      if (m) binds.push({ songId: m[1], ttmlId: m[2], url: b.url })
+      if (m) rawBinds.push({ songId: m[1], ttmlId: m[2] })
     }
     cursor = page.cursor
   } while (cursor)
+
+  const rawLegacy = []
+  cursor = undefined
+  do {
+    const page = await list({ prefix: PREFIX, cursor, limit: 500 })
+    for (const b of page.blobs || []) {
+      const m = /^ttml\/(\d+)\.ttml$/.exec(b.pathname)
+      if (m) {
+        rawLegacy.push({
+          songId: m[1],
+          pathname: b.pathname,
+          url: b.url,
+          size: b.size,
+          uploadedAt: b.uploadedAt,
+        })
+      }
+    }
+    cursor = page.cursor
+  } while (cursor)
+
+  // 逐个确认真的还在
+  const contents = []
+  for (const c of rawContents) {
+    if (await alive(contentKey(c.ttmlId))) contents.push(c)
+  }
+  const binds = []
+  for (const b of rawBinds) {
+    if (await alive(bindKey(b.songId, b.ttmlId))) binds.push(b)
+  }
+  const legacy = []
+  for (const l of rawLegacy) {
+    if (await alive(l.pathname)) legacy.push(l)
+  }
 
   const byId = new Map()
   for (const c of contents) byId.set(c.ttmlId, { ...c, ids: [], orphan: false })
   for (const b of binds) {
     if (!byId.has(b.ttmlId)) {
-      // 绑定还在、内容没了 —— 说明之前删漏了，标出来好清理
+      // 绑定还在、内容没了：历史遗留，标出来好清理
       byId.set(b.ttmlId, {
         ttmlId: b.ttmlId,
         size: null,
@@ -434,26 +482,6 @@ async function listAll() {
     }
     byId.get(b.ttmlId).ids.push(b.songId)
   }
-
-  // 老格式：ttml/<歌曲id>.ttml（内容就是文件本身）
-  const legacy = []
-  cursor = undefined
-  do {
-    const page = await list({ prefix: PREFIX, cursor, limit: 500 })
-    for (const b of page.blobs || []) {
-      const m = /^ttml\/(\d+)\.ttml$/.exec(b.pathname)
-      if (m) {
-        legacy.push({
-          songId: m[1],
-          pathname: b.pathname,
-          url: b.url,
-          size: b.size,
-          uploadedAt: b.uploadedAt,
-        })
-      }
-    }
-    cursor = page.cursor
-  } while (cursor)
 
   const items = [...byId.values()].map((it) => ({
     ...it,

@@ -314,8 +314,11 @@
                         btn.disabled = false;
                         if (needVerify(r)) return;
                         if (r.data && r.data.code === 200) {
+                            // 立刻从界面移除：list() 有延迟，等它会看起来像没删掉
+                            var item = btn.closest ? btn.closest('.item') : null;
+                            if (item) item.remove();
                             say(r.data.msg, 'ok');
-                            load();
+                            setTimeout(function () { load(true); }, 900);
                         } else {
                             say((r.data && r.data.msg) || ('HTTP ' + r.status), 'err');
                         }
@@ -338,8 +341,11 @@
                         btn.disabled = false;
                         if (needVerify(r)) return;
                         if (r.data && r.data.code === 200) {
+                            // 立刻从界面移除：list() 有延迟，等它会看起来像没删掉
+                            var item = btn.closest ? btn.closest('.item') : null;
+                            if (item) item.remove();
                             say(r.data.msg, 'ok');
-                            load();
+                            setTimeout(function () { load(true); }, 900);
                         } else {
                             say((r.data && r.data.msg) || ('HTTP ' + r.status), 'err');
                         }
@@ -350,8 +356,8 @@
                     });
             }
 
-            function load() {
-                say('加载中…');
+            function load(keepMsg) {
+                if (!keepMsg) say('加载中…');
                 api('/ttml/admin/list')
                     .then(function (r) {
                         if (needVerify(r)) return;
@@ -371,7 +377,7 @@
                         } else {
                             $('legacyBox').hidden = true;
                         }
-                        say('共 ' + r.data.total + ' 份 TTML、' + r.data.bindingCount + ' 条绑定。', 'ok');
+                        if (!keepMsg) say('共 ' + r.data.total + ' 份 TTML、' + r.data.bindingCount + ' 条绑定。', 'ok');
                     })
                     .catch(function (e) {
                         say('加载失败：' + (e && e.message ? e.message : e), 'err');
