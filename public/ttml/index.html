@@ -279,9 +279,10 @@
             </div>
 
             <div class="row" style="margin-top:12px">
-                <input type="text" id="delIds" placeholder="要删除的歌曲 id，可多个" style="flex:0 1 260px">
-                <button type="button" id="delBtn">删除已上传的 TTML</button>
-                <span class="hint" id="delInfo" style="margin:0">删掉就没了，会先让你过一遍人机验证</span>
+                <input type="text" id="unbindIds" placeholder="要解绑的歌曲 id，可多个" style="flex:0 1 220px">
+                <input type="text" id="unbindTtmlId" placeholder="这份歌词的 ttmlId" maxlength="16" style="flex:0 1 200px">
+                <button type="button" id="unbindBtn">解绑</button>
+                <span class="hint" id="unbindInfo" style="margin:0">两个 id 必须对得上才会解绑；解绑不叫删除</span>
             </div>
         </section>
 
@@ -512,6 +513,13 @@
                         if (r.status === 200 && r.data.ok) {
                             setResult('已通过审核并入库。', 'ok');
                             showJson(r.data);
+                            // 顺手把 ttmlId 填进解绑框，并显示这份歌词现在绑了哪些 id
+                            if (r.data.ttmlId) {
+                                $('unbindTtmlId').value = r.data.ttmlId;
+                                var bs = r.data.bindings || [];
+                                $('unbindInfo').textContent = 'ttmlId=' + r.data.ttmlId +
+                                    ' 现在绑着 ' + bs.length + ' 个歌曲 id：' + (bs.join('、') || '（无）');
+                            }
                             return;
                         }
                         setResult((r.data && r.data.msg) || ('提交失败 HTTP ' + r.status), 'err');
@@ -532,51 +540,58 @@
                 });
             }
 
-            /* ---------- 删除已上传的 TTML（两步确认，和 /file/ 一致） ---------- */
-            var pendingDel = null;
-            function resetDelBtn() {
-                pendingDel = null;
-                $('delBtn').textContent = '删除已上传的 TTML';
+            /* ---------- 解绑（必须「歌曲 id + ttmlId」一对，解绑不叫删除） ---------- */
+            var pendingUnbind = null;
+            function resetUnbindBtn() {
+                pendingUnbind = null;
+                $('unbindBtn').textContent = '解绑';
             }
-            $('delIds').addEventListener('input', resetDelBtn);
-            $('delBtn').addEventListener('click', function () {
-                var raw = $('delIds').value.replace(/[^\d,，、\s]/g, '').trim();
-                if (!raw) {
-                    $('delInfo').textContent = '先填要删的歌曲 id。';
+            $('unbindIds').addEventListener('input', resetUnbindBtn);
+            $('unbindTtmlId').addEventListener('input', function () {
+                this.value = this.value.replace(/[^0-9a-fA-F]/g, '').toLowerCase().slice(0, 16);
+                resetUnbindBtn();
+            });
+            $('unbindBtn').addEventListener('click', function () {
+                var ids = $('unbindIds').value.replace(/[^\d,，、\s]/g, '').trim();
+                var tid = $('unbindTtmlId').value.trim().toLowerCase();
+                if (!ids) { $('unbindInfo').textContent = '先填要解绑的歌曲 id。'; return; }
+                if (!/^[0-9a-f]{16}$/.test(tid)) {
+                    $('unbindInfo').textContent = '还要填这份歌词的 ttmlId（16 位十六进制）。';
                     return;
                 }
-                if (pendingDel !== raw) {
-                    pendingDel = raw;
-                    this.textContent = '再点一次确认删除';
-                    $('delInfo').textContent = '确认删除这些 id 的 TTML？删掉就没了：' + raw;
+                var key = ids + '|' + tid;
+                if (pendingUnbind !== key) {
+                    pendingUnbind = key;
+                    this.textContent = '再点一次确认解绑';
+                    $('unbindInfo').textContent = '确认把 ' + ids + ' 从 ttmlId=' + tid + ' 上解绑？';
                     return;
                 }
-                resetDelBtn();
-                doDelete(raw, this);
+                resetUnbindBtn();
+                doUnbind(ids, tid, this);
             });
 
-            function doDelete(ids, btn) {
+            function doUnbind(ids, ttmlId, btn) {
                 btn.disabled = true;
-                $('delInfo').textContent = '删除中…';
-                api('/ttml/delete', {
+                $('unbindInfo').textContent = '解绑中…';
+                api('/ttml/unbind', {
                     method: 'POST',
                     headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify({ ids: ids }),
+                    body: JSON.stringify({ ids: ids, ttmlId: ttmlId }),
                 })
                     .then(function (r) {
                         if (r.data && r.data.needVerify) {
                             clearPass();
-                            pendingSubmit = function () { doDelete(ids, btn); };
-                            showGate('先完成人机验证，通过后会自动继续删除');
-                            $('delInfo').textContent = '需要先完成人机验证。';
+                            pendingSubmit = function () { doUnbind(ids, ttmlId, btn); };
+                            showGate('先完成人机验证，通过后会自动继续解绑');
+                            $('unbindInfo').textContent = '需要先完成人机验证。';
                             return;
                         }
                         btn.disabled = false;
-                        $('delInfo').textContent = (r.data && r.data.msg) || ('HTTP ' + r.status);
+                        $('unbindInfo').textContent = (r.data && r.data.msg) || ('HTTP ' + r.status);
                     })
                     .catch(function (e) {
                         btn.disabled = false;
-                        $('delInfo').textContent = '删除失败：' + (e && e.message ? e.message : e);
+                        $('unbindInfo').textContent = '解绑失败：' + (e && e.message ? e.message : e);
                     });
             }
 

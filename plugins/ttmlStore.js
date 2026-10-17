@@ -93,6 +93,24 @@ async function bindingOf(songId) {
   return all.length ? all[0] : null
 }
 
+/**
+ * 精确判断「某个歌曲 id 是否绑着某一份歌词」。
+ *
+ * 直接用 head 查那条绑定的路径，不走 list —— list 是最终一致的，
+ * 刚绑上可能查不到，会导致「重复提交拦不住」或者更糟的「解绑解错」。
+ * 查重和解绑都以这个判断为准。
+ */
+async function isBound(songId, ttmlId) {
+  const { head } = require('@vercel/blob')
+  if (!isValidId(songId) || !isValidTtmlId(ttmlId)) return false
+  try {
+    const meta = await head(bindKey(String(songId), String(ttmlId)))
+    return !!(meta && meta.url)
+  } catch {
+    return false
+  }
+}
+
 /** 某个内容 id 还被哪些歌曲 id 绑着 */
 async function bindingsOfTtml(ttmlId) {
   const { list } = require('@vercel/blob')
@@ -157,10 +175,11 @@ async function readLegacy(songId) {
 
 /**
  * 保存：内容只写一份，再给每个歌曲 id 建立绑定。
- * 返回 { ttmlId, bound, already, rebound }：
+ * 返回 { ttmlId, bound, already, rebound, prevTtmlId }：
  *   bound   这次新建的绑定
  *   already 本来就已经绑到同一份内容的（不用重复处理）
- *   rebound 原来绑着别的歌词，这次改绑到这份（旧内容若无人使用会被清掉）
+ *   rebound 原来绑着别的歌词，这次改绑到这份
+ *   prevTtmlId  Map 语义的旧绑定，供上层提示「从哪份改绑过来的」
  */
 async function save(ids, ttml) {
   const { put } = require('@vercel/blob')
@@ -178,13 +197,18 @@ async function save(ids, ttml) {
   const bound = []
   const already = []
   const rebound = []
+  const prev = {}
   for (const id of ids) {
-    const cur = await bindingOf(id)
-    if (cur && cur.ttmlId === ttmlId) {
+    // 精确判断：不依赖 list，避免刚绑上查不到
+    if (await isBound(id, ttmlId)) {
       already.push(id)
       continue
     }
-    // 绑到新内容
+    const cur = await bindingOf(id)
+    if (cur && cur.ttmlId !== ttmlId) {
+      prev[id] = cur.ttmlId
+      rebound.push(id)
+    }
     await put(
       bindKey(id, ttmlId),
       JSON.stringify({ songId: String(id), ttmlId }),
@@ -195,9 +219,8 @@ async function save(ids, ttml) {
         addRandomSuffix: false,
       },
     )
-    if (cur) {
-      rebound.push(id)
-      // 删掉旧绑定点，旧内容没人用的话一并清掉
+    // 旧绑定点删掉；旧内容没人用就回收
+    if (cur && cur.ttmlId !== ttmlId) {
       const { del } = require('@vercel/blob')
       try {
         await del(cur.url)
@@ -209,7 +232,7 @@ async function save(ids, ttml) {
     bound.push(id)
   }
 
-  return { ttmlId, url: res.url, bound, already, rebound }
+  return { ttmlId, url: res.url, bound, already, rebound, prev }
 }
 
 /** 读取某个歌曲 id 的歌词；不存在返回 null */
@@ -255,9 +278,17 @@ async function stat(songId) {
   }
 }
 
-/** 如果没有别的歌曲 id 再绑这份内容，就把内容删掉 */
+/**
+ * 如果没有别的歌曲 id 再绑这份内容，就把内容删掉。
+ *
+ * list 是最终一致的：刚建好的绑定可能查不到。所以查两遍、中间隔一下，
+ * 宁可留一份没人用的内容（几 KB），也不能把还有人用的删掉。
+ */
 async function gcContent(ttmlId) {
-  const users = await bindingsOfTtml(ttmlId)
+  let users = await bindingsOfTtml(ttmlId)
+  if (users.length) return false
+  await new Promise((r) => setTimeout(r, 400))
+  users = await bindingsOfTtml(ttmlId)
   if (users.length) return false
   const { head, del } = require('@vercel/blob')
   try {
@@ -274,51 +305,69 @@ async function gcContent(ttmlId) {
  * 如果摘完这份歌词已经没有任何 id 在用，就连内容一起删掉
  * —— 这就是「与 id 解绑，并删掉当前的 TTML」。
  */
-async function unbind(songId) {
+async function unbind(songId, ttmlId) {
   const { del, head } = require('@vercel/blob')
-  const cur = await bindingOf(songId)
-  let ttmlId = null
-  let unbound = false
 
-  if (cur) {
-    ttmlId = cur.ttmlId
+  // 必须是「歌曲 id + 歌词 id」一对，两个都对得上才动手。
+  // 只给歌曲 id 就解绑等于盲删，只给歌词 id 就会一次解掉一堆 —— 都不允许。
+  if (!isValidId(songId) || !isValidTtmlId(ttmlId)) {
+    return {
+      unbound: false,
+      ttmlId,
+      contentDeleted: false,
+      error: '必须同时给出合法的歌曲 id 和歌词 ttmlId',
+    }
+  }
+
+  // 新模型：绑定文件本身就是一个确定的路径，直接删
+  if (await isBound(songId, ttmlId)) {
     try {
-      await del(cur.url)
-      unbound = true
-    } catch {
+      const meta = await head(bindKey(songId, ttmlId))
+      if (meta && meta.url) await del(meta.url)
+    } catch (e) {
       return {
         unbound: false,
         ttmlId,
         contentDeleted: false,
-        error: '解绑失败',
+        error: '解绑失败：' + (e.message || e),
       }
     }
-    // 同一个 id 若因为历史原因有多条绑定，一并清掉
-    for (const extra of (await listBindings(songId)).slice(1)) {
+    // 同一个 id 若因历史原因还挂着别的绑定，一并清掉
+    for (const extra of await listBindings(songId)) {
+      if (extra.ttmlId === ttmlId) continue
       try {
         await del(extra.url)
+        await gcContent(extra.ttmlId)
       } catch {
         /* 忽略 */
       }
     }
-  }
-
-  if (ttmlId) {
     const contentDeleted = await gcContent(ttmlId)
-    return { unbound, ttmlId, contentDeleted }
+    return { unbound: true, ttmlId, contentDeleted }
   }
 
-  // 老数据：ttml/<歌曲id>.ttml
-  try {
-    const meta = await head(legacyKey(songId))
-    if (meta && meta.url) {
-      await del(meta.url)
-      return { unbound: true, ttmlId: null, contentDeleted: true, legacy: true }
+  // 老模型：ttml/<歌曲id>.ttml —— 内容算出来的 id 必须与给的 ttmlId 一致
+  const legacy = await readLegacy(songId)
+  if (legacy && legacy.ttmlId === ttmlId) {
+    try {
+      await del(legacy.url)
+      return { unbound: true, ttmlId, contentDeleted: true, legacy: true }
+    } catch (e) {
+      return {
+        unbound: false,
+        ttmlId,
+        contentDeleted: false,
+        error: '解绑失败：' + (e.message || e),
+      }
     }
-  } catch {
-    /* 没有就返回下面的结果 */
   }
-  return { unbound: false, ttmlId: null, contentDeleted: false }
+
+  return {
+    unbound: false,
+    ttmlId,
+    contentDeleted: false,
+    error: '这个歌曲 id 并没有绑在这份 TTML 上（ttmlId 对不上）',
+  }
 }
 
 /**
@@ -348,6 +397,7 @@ module.exports = {
   load,
   stat,
   unbind,
+  isBound,
   gcContent,
   listBindings,
   bindingsOfTtml,

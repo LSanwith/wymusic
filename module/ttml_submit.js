@@ -249,6 +249,11 @@ module.exports = async (query, request) => {
     }
   }
 
+  // 这份歌词现在一共绑了哪些歌曲 id（用请求里的 + 已查到的，避免 list 的延迟漏掉刚建的）
+  const boundIds = [
+    ...new Set([...(await store.bindingsOfTtml(put.ttmlId)), ...ids]),
+  ]
+
   return {
     status: 200,
     body: {
@@ -260,10 +265,14 @@ module.exports = async (query, request) => {
       bound: put.bound,
       alreadyBound: put.already,
       rebound: put.rebound,
+      reboundFrom: put.prev,
+      // 这份 TTML 目前绑定的全部歌曲 id
+      bindings: boundIds,
       saved: ids.map((id) => ({
         id,
         api: '/search?ttml=' + id,
         url: store.downloadUrl(id),
+        bind: '/ttml/bind?id=' + id,
       })),
       review: {
         verdict: '脚本审核通过',
