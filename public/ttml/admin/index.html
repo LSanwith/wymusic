@@ -308,7 +308,7 @@
 
             function load() {
                 say('加载中…');
-                api('/ttml/admin')
+                api('/ttml/admin/list')
                     .then(function (r) {
                         if (needVerify(r)) return;
                         if (!r.data || r.data.code !== 200) {
