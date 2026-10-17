@@ -192,26 +192,42 @@
             <div class="row">
                 <input type="text" id="songId" inputmode="numeric" maxlength="20" placeholder="网易云歌曲 id，例如 186016">
                 <button type="button" id="fetchBtn">获取 TTML</button>
-                <button type="button" id="rawBtn" title="302 跳转到 Blob 原文，Content-Type 是 application/ttml+xml">打开原文</button>
+                <button type="button" id="appleBtn" title="返回 Apple Music 的 data[].attributes.ttmlLocalizations 结构">取 Apple 格式</button>
+                <button type="button" id="rawBtn" title="302 跳到 Blob 原文；application/ttml+xml 浏览器会存盘">下载 TTML 文件</button>
             </div>
             <div class="hint" id="info">先到 <a href="/ttml/">上传页</a> 传一份，再回来试。</div>
         </section>
 
         <section class="block">
             <h2>接口怎么调</h2>
-            <pre class="code">// 取 JSON（含 ttml 原文、Blob 地址、上传时间）
+            <pre class="code">// 1) 默认：本站自己的形状，TTML 内嵌成字符串
 const r = await fetch('/search?ttml=186016');
 const data = await r.json();
 if (data.code === 200) console.log(data.ttml);
+//   -> { code, id, ttml, url, size, uploadedAt }
 
-// 想直接拿 TTML 文件本体（正确的 MIME），加 raw=1，会 302 到 Blob
-//   /search?ttml=186016&amp;raw=1
+// 2) 对标 Apple Music：返回 data[].attributes.ttmlLocalizations
+//    /search?ttml=186016&amp;format=apple
+//    {
+//      "data": [{
+//        "id": "186016",
+//        "type": "syllable-lyrics",
+//        "attributes": {
+//          "playParams": { "catalogId": "186016", "displayType": 3,
+//                          "id": "AP_186016-zh", "kind": "lyric" },
+//          "language": "zh",
+//          "ttmlLocalizations": "&lt;tt xmlns=..."
+//        }
+//      }]
+//    }
 
-// 返回形状
-//   200  { code:200, id, ttml, url, size, uploadedAt }
-//   400  ttml 参数不是纯数字
-//   404  这个 id 还没有 TTML
-//   501  服务端没配 Blob</pre>
+// 3) 想要 TTML 文件本体（正确的 MIME），加 raw=1，会 302 到 Blob
+//    /search?ttml=186016&amp;raw=1
+//    注意：application/ttml+xml 浏览器没有渲染器，会直接存盘
+
+// 返回码
+//   200  成功     400  ttml 参数不是纯数字
+//   404  这个 id 还没有 TTML        501  服务端没配 Blob</pre>
         </section>
 
         <section class="block">
@@ -351,6 +367,38 @@ if (data.code === 200) console.log(data.ttml);
                     }
                 }, 100);
             }
+
+            /** Apple Music 形状：data[].attributes.ttmlLocalizations */
+            $('appleBtn').addEventListener('click', function () {
+                var id = readId();
+                if (!id) { say('先填一个歌曲 id。', 'err'); return; }
+                var btn = this;
+                btn.disabled = true;
+                say('请求中…');
+                fetch('/search?ttml=' + id + '&format=apple&_=' + Date.now())
+                    .then(function (r) { return r.json(); })
+                    .then(function (j) {
+                        btn.disabled = false;
+                        jsonBox.textContent = JSON.stringify(j, null, 2);
+                        var res = j.data && j.data[0];
+                        if (!res) {
+                            say((j.msg || '获取失败') + '（HTTP ' + j.code + '）', 'err');
+                            current = null;
+                            linesBox.innerHTML = '';
+                            playBtn.disabled = true;
+                            return;
+                        }
+                        var a = res.attributes || {};
+                        current = { id: id, ttml: a.ttmlLocalizations || '', url: '' };
+                        say('Apple 格式：' + (a.ttmlLocalizations || '').length +
+                            ' 字符，playParams.id = ' + ((a.playParams || {}).id || '-'), 'ok');
+                        renderLines(parseLines(current.ttml));
+                    })
+                    .catch(function (e) {
+                        btn.disabled = false;
+                        say('请求失败：' + (e && e.message ? e.message : e), 'err');
+                    });
+            });
 
             $('fetchBtn').addEventListener('click', function () {
                 var id = readId();

@@ -61,6 +61,40 @@ async function readTtml(query) {
     return { status: 302, body: '', redirectUrl: hit.url }
   }
 
+  // Apple Music 的形状：{ data: [{ id, type, attributes: { playParams, ttmlLocalizations } }] }
+  // 对标 Apple 的 syllable-lyrics 资源，方便直接对接吃 Apple TTML 的客户端。
+  // 注意 id 仍是本接口的网易云 id（Apple 的 catalogId 是人家的目录号，这里没有对应关系）。
+  if (
+    query.format === 'apple' ||
+    query.apple === '1' ||
+    query.apple === 'true'
+  ) {
+    const langMatch = hit.ttml.match(/xml:lang\s*=\s*["']([^"']+)["']/i)
+    const lang = (langMatch && langMatch[1]) || 'zh'
+    return {
+      status: 200,
+      body: {
+        data: [
+          {
+            id,
+            type: 'syllable-lyrics',
+            attributes: {
+              playParams: {
+                catalogId: id,
+                // 3 = 逐字/逐音节歌词（Apple 的 displayType 取值）
+                displayType: 3,
+                id: `AP_${id}-${lang}`,
+                kind: 'lyric',
+              },
+              language: lang,
+              ttmlLocalizations: hit.ttml,
+            },
+          },
+        ],
+      },
+    }
+  }
+
   return {
     status: 200,
     body: {
