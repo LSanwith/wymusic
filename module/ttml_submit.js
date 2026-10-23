@@ -159,14 +159,21 @@ module.exports = async (query, request) => {
   }
 
   // 3) 逐 id 与官方歌词比对，每个都必须过
+  //    歌词并发取：一个一个 await 的话，N 个 id 就是 N 次跨洋往返
+  const lrcs = await Promise.all(
+    songs.map(async (s) => {
+      try {
+        return await fetchLyric(s.id, query, request)
+      } catch {
+        return ''
+      }
+    }),
+  )
+
   const checks = []
-  for (const s of songs) {
-    let lrc = ''
-    try {
-      lrc = await fetchLyric(s.id, query, request)
-    } catch {
-      lrc = ''
-    }
+  for (let i = 0; i < songs.length; i++) {
+    const s = songs[i]
+    const lrc = lrcs[i]
     if (!review.lyricUsable(lrc)) {
       checks.push({
         id: String(s.id),

@@ -452,19 +452,15 @@ async function listAll() {
     cursor = page.cursor
   } while (cursor)
 
-  // 逐个确认真的还在
-  const contents = []
-  for (const c of rawContents) {
-    if (await alive(contentKey(c.ttmlId))) contents.push(c)
-  }
-  const binds = []
-  for (const b of rawBinds) {
-    if (await alive(bindKey(b.songId, b.ttmlId))) binds.push(b)
-  }
-  const legacy = []
-  for (const l of rawLegacy) {
-    if (await alive(l.pathname)) legacy.push(l)
-  }
+  // 确认真的还在：并发查，别一条条等（每条都是一次 Blob 请求）
+  const [okContents, okBinds, okLegacy] = await Promise.all([
+    Promise.all(rawContents.map((c) => alive(contentKey(c.ttmlId)))),
+    Promise.all(rawBinds.map((b) => alive(bindKey(b.songId, b.ttmlId)))),
+    Promise.all(rawLegacy.map((l) => alive(l.pathname))),
+  ])
+  const contents = rawContents.filter((_, i) => okContents[i])
+  const binds = rawBinds.filter((_, i) => okBinds[i])
+  const legacy = rawLegacy.filter((_, i) => okLegacy[i])
 
   const byId = new Map()
   for (const c of contents) byId.set(c.ttmlId, { ...c, ids: [], orphan: false })
