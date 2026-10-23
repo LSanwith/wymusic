@@ -107,6 +107,7 @@
                     <span>老格式 <b id="nLegacy">—</b> 个</span>
                 </div>
                 <div class="row" style="gap: 8px">
+                    <input type="password" id="pw" placeholder="删除需要管理密码" autocomplete="off" style="padding:8px 12px;font-size:13px;font-family:inherit;color:#fff;background:rgba(0,0,0,.28);border:1px solid var(--card-border);border-radius:9px;outline:none;width:190px">
                     <button type="button" id="reloadBtn">刷新</button>
                     <a href="/ttml/" class="hint">去上传页</a>
                 </div>
@@ -127,7 +128,6 @@
     <script>
         (function () {
             'use strict';
-            var PASS_KEY = 'bmusic.fileProxy.pass';
             var $ = function (id) { return document.getElementById(id); };
             var info = $('info');
             var pending = null;   // 两步确认：记住要点哪个
@@ -135,7 +135,6 @@
             // 这期间还会把它们列出来。本会话内先自己滤掉，避免看起来像没删掉）
             var deleted = Object.create(null);
 
-            function pass() { try { return localStorage.getItem(PASS_KEY) || ''; } catch (e) { return ''; } }
             function say(t, kind) {
                 info.textContent = t;
                 info.className = 'hint' + (kind ? ' ' + kind : '');
@@ -155,19 +154,22 @@
                     ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
             }
 
-            /** 带通行证的请求 */
+            /** 统一请求：列表是公开的；删除时密码放在 body 里 */
             function api(url, opts) {
                 opts = opts || {};
-                var p = pass();
-                var full = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'pass=' + encodeURIComponent(p);
-                return fetch(full, opts).then(function (r) {
+                return fetch(url, opts).then(function (r) {
                     return r.json().then(function (j) { return { status: r.status, data: j }; });
                 });
             }
 
+            /** 删除前必须有管理密码 */
+            function adminPw() {
+                return $('pw').value.trim();
+            }
+
             function needVerify(r) {
-                if (r.status === 403 && r.data && r.data.needVerify) {
-                    say('需要先完成人机验证：去 /ttml/ 页面过一下（12 小时内有效），然后回来刷新。', 'err');
+                if (r.status === 403) {
+                    say((r.data && r.data.msg) || '管理密码不对', 'err');
                     return true;
                 }
                 return false;
@@ -232,7 +234,7 @@
                             return;
                         }
                         pending = null;
-                        doDestroy(it.ttmlId, del);
+                        if (!adminPw()) { del.textContent = '删除这份'; say('删除需要管理密码，先在右上角填上。', 'err'); return; }
                     });
                     acts.appendChild(del);
                     top.appendChild(acts);
@@ -296,7 +298,7 @@
                             return;
                         }
                         pending = null;
-                        doDestroyLegacy(it.songId, del);
+                        if (!adminPw()) { del.textContent = '删除这份'; say('删除需要管理密码，先在右上角填上。', 'err'); return; }
                     });
                     acts.appendChild(del);
                     top.appendChild(acts);
@@ -311,7 +313,7 @@
                 api('/ttml/destroy', {
                     method: 'POST',
                     headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify({ ttmlId: ttmlId }),
+                    body: JSON.stringify({ ttmlId: ttmlId, password: adminPw() }),
                 })
                     .then(function (r) {
                         btn.disabled = false;
@@ -339,7 +341,7 @@
                 api('/ttml/destroy', {
                     method: 'POST',
                     headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify({ songId: songId }),
+                    body: JSON.stringify({ songId: songId, password: adminPw() }),
                 })
                     .then(function (r) {
                         btn.disabled = false;
@@ -401,12 +403,8 @@
                     });
             }
 
-            $('reloadBtn').addEventListener('click', load);
-            if (!pass()) {
-                say('本地没有人机验证通行证：先去 /ttml/ 页面过一下验证（12 小时内有效），再回来刷新。', 'err');
-            } else {
-                load();
-            }
+            $('reloadBtn').addEventListener('click', function () { load(); });
+            load();
         })();
     </script>
 </body>

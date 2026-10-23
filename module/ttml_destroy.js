@@ -1,13 +1,51 @@
-// /ttml/destroy —— 后台：真删除一份 TTML
+// /ttml/destroy —— 管理页：真删除一份 TTML
+//
+// 管理页本身是公开的（谁都能看有哪些歌词、各绑了哪些歌曲 id），
+// 但「删除」必须给管理密码 —— 密码来自环境变量 TTML_ADMIN_PASS，
+// 不写进代码（这个仓库是公开的 fork）。
+//
+// 密码没配置时删除功能直接关闭（fail closed），不会变成「谁都能删」。
 //
 // 删除 = 内容从 Blob 上真的删掉（不留），并且它绑的所有歌曲 id 自动解绑。
-// 这是后台专用动作，必须带 ttmlId，必须过人机验证。
+const crypto = require('crypto')
 const store = require('../plugins/ttmlStore.js')
-const filePass = require('../plugins/filePass.js')
+
+/** 正确的管理密码；没配就是空串 */
+function adminPass() {
+  return String(process.env.TTML_ADMIN_PASS || '')
+}
+
+/**
+ * 校验管理密码。
+ * 先各自 sha256 再定长比较：既避开长度不等时 timingSafeEqual 抛错，
+ * 也不泄露「密码多长、从第几位开始不一样」。
+ */
+function checkPassword(input) {
+  const want = adminPass()
+  if (!want) return { ok: false, reason: 'no-pass' }
+  const got = String(input == null ? '' : input)
+  if (!got) return { ok: false, reason: 'missing' }
+  const a = crypto.createHash('sha256').update(got, 'utf8').digest()
+  const b = crypto.createHash('sha256').update(want, 'utf8').digest()
+  return { ok: crypto.timingSafeEqual(a, b), reason: 'mismatch' }
+}
 
 module.exports = async (query) => {
-  const denied = filePass.guard(query)
-  if (denied) return denied
+  const pw = checkPassword(query.password)
+  if (!pw.ok) {
+    if (pw.reason === 'no-pass') {
+      return {
+        status: 501,
+        body: {
+          code: 501,
+          msg: '服务端没配置 TTML_ADMIN_PASS，删除功能是关闭的',
+        },
+      }
+    }
+    // 密码错时故意慢一点，抬高暴力尝试的成本
+    await new Promise((r) => setTimeout(r, 600))
+    return { status: 403, body: { code: 403, msg: '管理密码不对' } }
+  }
 
   if (!store.hasToken()) {
     return {

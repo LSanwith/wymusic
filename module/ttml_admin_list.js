@@ -1,13 +1,11 @@
 // /ttml/admin/list —— 管理页：列出所有已上传的 TTML 及其绑定的歌曲 id
 //
-// 只读，但内容和绑定关系全都在这里，所以照样过人机验证。
+// 这个接口是**公开**的：没有任何密钥，谁都能看到现在有哪些歌词、各绑了哪些歌曲 id。
+// 只读，不含歌词正文（正文在 /search?ttml=<歌曲id>，本来就是公开可读的）。
+// 删除（/ttml/destroy）才需要管理密码，和这里分开。
 const store = require('../plugins/ttmlStore.js')
-const filePass = require('../plugins/filePass.js')
 
-module.exports = async (query) => {
-  const denied = filePass.guard(query)
-  if (denied) return denied
-
+module.exports = async () => {
   if (!store.hasToken()) {
     return {
       status: 501,
@@ -52,6 +50,8 @@ module.exports = async (query) => {
       // 老格式 ttml/<歌曲id>.ttml，单独列出来
       legacy: data.legacy || [],
       legacyCount: (data.legacy || []).length,
+      // 服务端有没有配管理密码：没配的话删除是关闭的，页面据此提示
+      canDelete: !!String(process.env.TTML_ADMIN_PASS || ''),
     },
   }
 }
