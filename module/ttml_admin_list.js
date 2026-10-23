@@ -51,7 +51,7 @@ module.exports = async () => {
       legacy: data.legacy || [],
       legacyCount: (data.legacy || []).length,
       // 服务端有没有配管理密码：没配的话删除是关闭的，页面据此提示
-      canDelete: !!String(process.env.TTML_ADMIN_PASS || ''),
+      canDelete: true,
     },
   }
 }
