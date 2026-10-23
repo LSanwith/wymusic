@@ -9,6 +9,66 @@
   ],
   "routes": [
     {
+      "src": "/song/(.*)",
+      "dest": "/",
+      "headers": {
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version",
+        "Cache-Control": "public, s-maxage=60, stale-while-revalidate=600"
+      }
+    },
+    {
+      "src": "/search",
+      "dest": "/",
+      "headers": {
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version",
+        "Cache-Control": "public, s-maxage=120, stale-while-revalidate=600"
+      }
+    },
+    {
+      "src": "/lyric",
+      "dest": "/",
+      "headers": {
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version",
+        "Cache-Control": "public, s-maxage=600, stale-while-revalidate=3600"
+      }
+    },
+    {
+      "src": "/(album|artist|playlist)/(.*)",
+      "dest": "/",
+      "headers": {
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version",
+        "Cache-Control": "public, s-maxage=300, stale-while-revalidate=1800"
+      }
+    },
+    {
+      "src": "/ttml/song",
+      "dest": "/",
+      "headers": {
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version",
+        "Cache-Control": "public, s-maxage=300, stale-while-revalidate=1800"
+      }
+    },
+    {
+      "src": "/ttml/bind",
+      "dest": "/",
+      "headers": {
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version",
+        "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300"
+      }
+    },
+    {
       "src": "/(.*)",
       "dest": "/",
       "headers": {
@@ -16,80 +76,6 @@
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version"
       }
-    }
-  ],
-  "headers": [
-    {
-      "source": "/song/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, s-maxage=60, stale-while-revalidate=600"
-        }
-      ]
-    },
-    {
-      "source": "/search",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, s-maxage=120, stale-while-revalidate=600"
-        }
-      ]
-    },
-    {
-      "source": "/lyric",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, s-maxage=600, stale-while-revalidate=3600"
-        }
-      ]
-    },
-    {
-      "source": "/album/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, s-maxage=300, stale-while-revalidate=1800"
-        }
-      ]
-    },
-    {
-      "source": "/artist/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, s-maxage=300, stale-while-revalidate=1800"
-        }
-      ]
-    },
-    {
-      "source": "/playlist/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, s-maxage=300, stale-while-revalidate=1800"
-        }
-      ]
-    },
-    {
-      "source": "/ttml/song",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, s-maxage=300, stale-while-revalidate=1800"
-        }
-      ]
-    },
-    {
-      "source": "/ttml/bind",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, s-maxage=60, stale-while-revalidate=300"
-        }
-      ]
     }
   ],
   "env": {

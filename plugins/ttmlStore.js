@@ -393,74 +393,44 @@ async function destroyLegacy(songId) {
  * 宁可多发几个请求，也不能让已经删掉的东西一直挂在界面上。
  */
 async function listAll() {
-  const { list, head } = require('@vercel/blob')
+  const { list } = require('@vercel/blob')
 
-  async function alive(pathname) {
-    try {
-      const m = await head(pathname)
-      return !!(m && m.url)
-    } catch {
-      return false
-    }
-  }
-
-  const rawContents = []
+  // 一次 list 拿全（ttml/ 下面只有三种路径：c/<ttmlId>.ttml、b/<id>--<ttmlId>.json、<id>.ttml）
+  // 原来分三次 list 各取一种，每次都是一次往返，在跨区网络下非常贵。
+  const raw = []
   let cursor
   do {
-    const page = await list({ prefix: CONTENT_PREFIX, cursor, limit: 200 })
-    for (const b of page.blobs || []) {
-      const m = /^ttml\/c\/([0-9a-f]{16})\.ttml$/.exec(b.pathname)
-      if (m) {
-        rawContents.push({
-          ttmlId: m[1],
-          size: b.size,
-          uploadedAt: b.uploadedAt,
-          url: b.url,
-        })
-      }
-    }
-    cursor = page.cursor
-  } while (cursor)
-
-  const rawBinds = []
-  cursor = undefined
-  do {
-    const page = await list({ prefix: BIND_PREFIX, cursor, limit: 500 })
-    for (const b of page.blobs || []) {
-      const m = /^ttml\/b\/(\d+)--([0-9a-f]{16})\.json$/.exec(b.pathname)
-      if (m) rawBinds.push({ songId: m[1], ttmlId: m[2] })
-    }
-    cursor = page.cursor
-  } while (cursor)
-
-  const rawLegacy = []
-  cursor = undefined
-  do {
     const page = await list({ prefix: PREFIX, cursor, limit: 500 })
-    for (const b of page.blobs || []) {
-      const m = /^ttml\/(\d+)\.ttml$/.exec(b.pathname)
-      if (m) {
-        rawLegacy.push({
-          songId: m[1],
-          pathname: b.pathname,
-          url: b.url,
-          size: b.size,
-          uploadedAt: b.uploadedAt,
-        })
-      }
-    }
+    for (const b of page.blobs || []) raw.push(b)
     cursor = page.cursor
   } while (cursor)
 
-  // 确认真的还在：并发查，别一条条等（每条都是一次 Blob 请求）
-  const [okContents, okBinds, okLegacy] = await Promise.all([
-    Promise.all(rawContents.map((c) => alive(contentKey(c.ttmlId)))),
-    Promise.all(rawBinds.map((b) => alive(bindKey(b.songId, b.ttmlId)))),
-    Promise.all(rawLegacy.map((l) => alive(l.pathname))),
-  ])
-  const contents = rawContents.filter((_, i) => okContents[i])
-  const binds = rawBinds.filter((_, i) => okBinds[i])
-  const legacy = rawLegacy.filter((_, i) => okLegacy[i])
+  const contents = []
+  const binds = []
+  const legacy = []
+  for (const b of raw) {
+    let m
+    if ((m = /^ttml\/c\/([0-9a-f]{16})\.ttml$/.exec(b.pathname))) {
+      contents.push({
+        ttmlId: m[1],
+        size: b.size,
+        uploadedAt: b.uploadedAt,
+        url: b.url,
+      })
+    } else if (
+      (m = /^ttml\/b\/(\d+)--([0-9a-f]{16})\.json$/.exec(b.pathname))
+    ) {
+      binds.push({ songId: m[1], ttmlId: m[2] })
+    } else if ((m = /^ttml\/(\d+)\.ttml$/.exec(b.pathname))) {
+      legacy.push({
+        songId: m[1],
+        pathname: b.pathname,
+        url: b.url,
+        size: b.size,
+        uploadedAt: b.uploadedAt,
+      })
+    }
+  }
 
   const byId = new Map()
   for (const c of contents) byId.set(c.ttmlId, { ...c, ids: [], orphan: false })
