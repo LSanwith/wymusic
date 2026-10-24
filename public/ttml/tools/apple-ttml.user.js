@@ -105,7 +105,49 @@
 
   // ---------- 保存 ----------
 
-  function saveOne(ttml, songId, source) {
+  // ---------- 保存目录（File System Access API，可选）----------
+  // 浏览器不允许脚本自己指定下载目录，但用户点一下就能授权一个文件夹，
+  // 之后所有文件直接写进去，也不会被「多文件自动下载」拦。
+  let dirHandle = null
+
+  async function pickDir() {
+    if (!window.showDirectoryPicker) {
+      log('这个浏览器不支持选目录，会存到默认下载目录', 'warn')
+      return
+    }
+    try {
+      dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' })
+      log('已选目录：' + dirHandle.name + '，之后都存这里', 'ok')
+    } catch (e) {
+      log('没选目录（' + (e && e.message) + '），继续用默认下载目录')
+    }
+  }
+
+  async function writeToDir(name, text) {
+    if (!dirHandle) return false
+    try {
+      let perm = await dirHandle.queryPermission({ mode: 'readwrite' })
+      if (perm !== 'granted') {
+        perm = await dirHandle.requestPermission({ mode: 'readwrite' })
+      }
+      if (perm !== 'granted') {
+        log('目录写入权限被拒，改用默认下载目录', 'warn')
+        dirHandle = null
+        return false
+      }
+      const fh = await dirHandle.getFileHandle(name, { create: true })
+      const w = await fh.createWritable()
+      await w.write(text)
+      await w.close()
+      return true
+    } catch (e) {
+      log('写文件失败：' + (e && e.message), 'warn')
+      dirHandle = null
+      return false
+    }
+  }
+
+  async function saveOne(ttml, songId, source) {
     const fp = fingerprint(ttml)
     if (saved.has(fp)) return false
     saved.add(fp)
@@ -116,6 +158,15 @@
     let n = 1
     while (names.has(name)) name = id + '-' + ++n + '.ttml'
     names.add(name)
+
+    if (dirHandle) {
+      const ok = await writeToDir(name, ttml)
+      if (ok) {
+        count++
+        log('已写入 ' + dirHandle.name + '/' + name + '（' + (ttml.length / 1024).toFixed(1) + ' KB）', 'ok')
+        return true
+      }
+    }
 
     const blob = new Blob([ttml], { type: 'application/ttml+xml;charset=utf-8' })
     const url = URL.createObjectURL(blob)
@@ -131,20 +182,20 @@
     }, 4000)
 
     count++
-    log('已保存 ' + name + '（' + (ttml.length / 1024).toFixed(1) + ' KB，来自 ' + source + '）', 'ok')
+    log('已下载 ' + name + '（' + (ttml.length / 1024).toFixed(1) + ' KB，来自 ' + source + '，在浏览器下载目录）', 'ok')
     return true
   }
 
   const names = new Set()
 
   /** 扫描一段文本，存下其中所有 TTML */
-  function harvest(text, url) {
+  async function harvest(text, url) {
     if (!enabled) return 0
     const list = extractTtml(text)
     if (!list.length) return 0
     const songId = guessSongId(text, url || location.href)
     let n = 0
-    for (const t of list) if (saveOne(t, songId, url ? '接口' : '页面')) n++
+    for (const t of list) if (await saveOne(t, songId, url ? '接口' : '页面')) n++
     return n
   }
 
@@ -199,16 +250,24 @@
   }
 
   // ---------- 扫描页面内联数据 ----------
-  function scanPage() {
+  async function scanPage() {
     let n = 0
     // 页面里内联的 JSON（Apple 的 serialized-server-data 就在这里）
-    document.querySelectorAll('script[type="application/json"], script[id], script').forEach((s) => {
+    const scripts = document.querySelectorAll(
+      'script[type="application/json"], script[id], script',
+    )
+    for (const s of scripts) {
       const t = s.textContent
-      if (t && t.length > 200 && t.indexOf('tt') >= 0) n += harvest(t, '')
-    })
+      if (t && t.length > 200 && t.indexOf('tt') >= 0) n += await harvest(t, '')
+    }
     // 兜底：整页 HTML 里的 TTML
-    if (!n) n += harvest(document.documentElement.innerHTML, '')
-    log(n ? '扫到 ' + n + ' 份 TTML' : '当前页面没找到 TTML（试试播放这首歌，或点开歌词）', n ? 'ok' : '')
+    if (!n) n += await harvest(document.documentElement.innerHTML, '')
+    log(
+      n
+        ? '扫到 ' + n + ' 份 TTML'
+        : '当前页面没找到 TTML（试试播放这首歌，或点开歌词）',
+      n ? 'ok' : '',
+    )
     return n
   }
 
@@ -240,7 +299,7 @@
           })
           if (!r.ok) continue
           const body = await r.text()
-          if (harvest(body, u)) got = true
+          if (await harvest(body, u)) got = true
         } catch (e) {
           /* 试下一个 */
         }
@@ -277,10 +336,16 @@
       '<div class="ttml-row">' +
       '<button type="button" class="ttml-btn" data-act="scan">扫当前页</button>' +
       '<button type="button" class="ttml-btn" data-act="batch">按 id 批量</button>' +
+      '</div>' +
+      '<div class="ttml-row">' +
+      '<button type="button" class="ttml-btn" data-act="dir">选保存目录</button>' +
       '<button type="button" class="ttml-btn" data-act="toggle">自动拦截：开</button>' +
       '</div>' +
       '<div class="ttml-log"></div>' +
-      '<div class="ttml-tip">播放一首歌 / 打开歌曲页，TTML 会自动存成 .ttml</div>' +
+      '<div class="ttml-tip">' +
+      '播放一首歌 / 打开歌曲页，TTML 会自动存成 .ttml。<br>' +
+      '不选目录就落在浏览器默认下载目录（一般是「下载」文件夹）。' +
+      '</div>' +
       '</div>'
 
     const css = document.createElement('style')
@@ -315,6 +380,7 @@
       if (!b) return
       const act = b.getAttribute('data-act')
       if (act === 'scan') scanPage()
+      if (act === 'dir') pickDir()
       if (act === 'batch') {
         const input = prompt('粘贴 Apple Music 歌曲 id（多个用逗号或空格分隔）')
         if (input) fetchByIds(input)
