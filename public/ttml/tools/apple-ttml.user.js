@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Apple Music TTML 提取
 // @namespace    https://www.sanwith.cc.cd/ttml/
-// @version      1.1.0
+// @version      1.2.0
 // @description  从 Apple Music 网页播放器自动提取逐字 TTML 歌词，一首一个 .ttml 文件，只存 TTML 本体
 // @author       Sanwith
 // @match        https://music.apple.com/*
@@ -152,11 +152,13 @@
     if (saved.has(fp)) return false
     saved.add(fp)
 
-    const id = songId || 'unknown-' + Date.now()
-    let name = id + '.ttml'
-    // 同一首歌有多份（不同语言版本）时，别互相覆盖
+    // 文件名用歌名；认不出歌名才退回歌曲 id
+    const id = String(songId || '')
+    const title = songNameOf(id) || id || 'unknown-' + Date.now()
+    let name = title + '.ttml'
+    // 同名（不同歌手/不同版本）别互相覆盖
     let n = 1
-    while (names.has(name)) name = id + '-' + ++n + '.ttml'
+    while (names.has(name)) name = title + ' (' + ++n + ').ttml'
     names.add(name)
 
     if (dirHandle) {
@@ -188,9 +190,53 @@
 
   const names = new Set()
 
+  // 歌曲 id -> 歌名。Apple 的歌曲响应里 data[].attributes.name 就是歌名，
+  // 顺手记下来，等 TTML 到的时候拿它当文件名。
+  const nameById = new Map()
+
+  function learnNames(text) {
+    try {
+      if (text.indexOf('"attributes"') < 0 || text.indexOf('"name"') < 0) return
+      const j = JSON.parse(text)
+      const arr = (j && j.data) || []
+      for (const d of arr) {
+        if (d && d.id && d.attributes && d.attributes.name) {
+          nameById.set(String(d.id), String(d.attributes.name))
+        }
+      }
+    } catch (e) {
+      /* 不是 JSON 就算了 */
+    }
+  }
+
+  /** 文件名里不能出现的字符换成空格 */
+  function safeName(s) {
+    return String(s || '')
+      .replace(/[\\/:*?"<>|]/g, ' ')
+      .replace(/[\u0000-\u001f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80)
+  }
+
+  /** 取歌名：优先用学到的，其次用页面标题（「晴天 - 周杰伦演唱… - Apple Music」） */
+  function songNameOf(id) {
+    const got = id && nameById.get(String(id))
+    if (got) return safeName(got)
+    const t = document.title || ''
+    const first = t
+      .replace(/\s*[-–]\s*Apple Music\s*$/i, '')
+      .split(/\s+[-–]\s+/)[0]
+    if (first && !/未找到页面|Apple Music|网页播放器/.test(first)) {
+      return safeName(first)
+    }
+    return ''
+  }
+
   /** 扫描一段文本，存下其中所有 TTML */
   async function harvest(text, url) {
     if (!enabled) return 0
+    learnNames(text)
     const list = extractTtml(text)
     if (!list.length) return 0
     const songId = guessSongId(text, url || location.href)
@@ -315,16 +361,16 @@
     }
     log('批量取 ' + list.length + ' 首…' + (apiAuth ? '' : '（还没拿到接口凭据）'))
     for (const id of list) {
-      // 第一条是 Apple 的歌词专用接口，第二条是歌曲详情（带 include=lyrics）。
-      // 两条都用页面自己的 Authorization，别的不伪造。
+      // 先取歌曲详情（里面有歌名，学到之后文件名才能用歌名），再取歌词。
+      // 两条都用页面自己的 Authorization，不伪造 token。
       const urls = [
-        'https://amp-api.music.apple.com/v1/catalog/cn/songs/' +
-          id +
-          '/lyrics?l=zh-Hans-CN&extend=ttmlLocalizations&format=json&platform=web',
         'https://amp-api.music.apple.com/v1/catalog/cn/songs/' +
           id +
           '?art[url]=f&extend=lyricsExcerpt,offers&format[resources]=map' +
           '&include=albums,artists,credits,lyrics,music-videos&l=zh-Hans-CN&platform=web',
+        'https://amp-api.music.apple.com/v1/catalog/cn/songs/' +
+          id +
+          '/lyrics?l=zh-Hans-CN&extend=ttmlLocalizations&format=json&platform=web',
       ]
       let got = false
       for (const u of urls) {
