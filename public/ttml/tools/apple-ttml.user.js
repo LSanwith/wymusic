@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Apple Music TTML 提取
 // @namespace    https://www.sanwith.cc.cd/ttml/
-// @version      1.0.0
+// @version      1.1.0
 // @description  从 Apple Music 网页播放器自动提取逐字 TTML 歌词，一首一个 .ttml 文件，只存 TTML 本体
 // @author       Sanwith
 // @match        https://music.apple.com/*
@@ -199,11 +199,43 @@
     return n
   }
 
+  // ---------- 从页面自己的请求里学 Authorization ----------
+  // amp-api 要 Bearer token，歌词还要订阅态。这些都在 Apple 网页播放器自己的请求头里，
+  // 我们不去猜、也不去伪造，直接沿用它的。
+  let apiAuth = null
+
+  function learnAuth(url, init) {
+    try {
+      if (!/^https:\/\/amp-api\.music\.apple\.com\//.test(String(url || ''))) return
+      const h = init && init.headers
+      if (!h) return
+      let auth = null
+      if (typeof h.get === 'function') {
+        auth = h.get('authorization')
+      } else if (typeof h === 'object') {
+        for (const k of Object.keys(h)) {
+          if (k.toLowerCase() === 'authorization') auth = h[k]
+        }
+      }
+      if (auth && auth !== apiAuth) {
+        apiAuth = auth
+        log('已拿到 Apple 的接口凭据（之后批量取就能用了）')
+      }
+    } catch (e) {
+      /* 忽略 */
+    }
+  }
+
   // ---------- 拦截 fetch ----------
   const origFetch = window.fetch
   if (origFetch) {
     window.fetch = function () {
       const args = arguments
+      try {
+        learnAuth(args[0] && args[0].url ? args[0].url : args[0], args[1])
+      } catch (e) {
+        /* 忽略 */
+      }
       const p = origFetch.apply(this, args)
       p.then((res) => {
         try {
@@ -281,30 +313,42 @@
       log('没识别到合法的歌曲 id（应该是 6 位以上的纯数字）')
       return
     }
-    log('批量取 ' + list.length + ' 首…')
+    log('批量取 ' + list.length + ' 首…' + (apiAuth ? '' : '（还没拿到接口凭据）'))
     for (const id of list) {
-      // Apple 网页播放器用的就是这个接口，带上 cookie 就有权限
+      // 第一条是 Apple 的歌词专用接口，第二条是歌曲详情（带 include=lyrics）。
+      // 两条都用页面自己的 Authorization，别的不伪造。
       const urls = [
         'https://amp-api.music.apple.com/v1/catalog/cn/songs/' +
           id +
-          '/lyrics?l=zh-Hans-CN&extend=ttmlLocalizations&format=json',
-        'https://amp-api.music.apple.com/v1/catalog/cn/songs/' + id + '?extend=lyrics',
+          '/lyrics?l=zh-Hans-CN&extend=ttmlLocalizations&format=json&platform=web',
+        'https://amp-api.music.apple.com/v1/catalog/cn/songs/' +
+          id +
+          '?art[url]=f&extend=lyricsExcerpt,offers&format[resources]=map' +
+          '&include=albums,artists,credits,lyrics,music-videos&l=zh-Hans-CN&platform=web',
       ]
       let got = false
       for (const u of urls) {
         try {
+          const hdrs = {
+            Origin: 'https://music.apple.com',
+            Referer: 'https://music.apple.com/',
+          }
+          if (apiAuth) hdrs.Authorization = apiAuth
           const r = await origFetch(u, {
             credentials: 'include',
-            headers: { Origin: 'https://music.apple.com', Referer: 'https://music.apple.com/' },
+            headers: hdrs,
           })
-          if (!r.ok) continue
+          if (!r.ok) {
+            log('id ' + id + ' 返回 ' + r.status + '（' + (u.indexOf('/lyrics') > 0 ? '歌词接口' : '歌曲详情') + '）', 'warn')
+            continue
+          }
           const body = await r.text()
           if (await harvest(body, u)) got = true
         } catch (e) {
           /* 试下一个 */
         }
       }
-      if (!got) log('id ' + id + ' 没取到（可能没这首歌、没权限，或者接口变了）', 'warn')
+      if (!got) log('id ' + id + ' 没取到 TTML', 'warn')
       await new Promise((r) => setTimeout(r, 400))
     }
     log('批量结束，本次共保存 ' + count + ' 份')
@@ -334,6 +378,9 @@
       '</div>' +
       '<div class="ttml-body">' +
       '<div class="ttml-row">' +
+      '<input class="ttml-ids" type="text" placeholder="歌曲 id，多个用逗号分隔（例 535824738）">' +
+      '</div>' +
+      '<div class="ttml-row">' +
       '<button type="button" class="ttml-btn" data-act="scan">扫当前页</button>' +
       '<button type="button" class="ttml-btn" data-act="batch">按 id 批量</button>' +
       '</div>' +
@@ -361,6 +408,8 @@
       #ttml-tool .ttml-body{padding:10px}
       #ttml-tool .ttml-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
       #ttml-tool .ttml-btn{flex:1 1 auto;padding:6px 8px;border-radius:8px;cursor:pointer;
+      #ttml-tool .ttml-ids{width:100%;padding:6px 8px;border-radius:8px;
+        background:#000;border:1px solid #48484a;color:#f2f2f7;font-size:12px;outline:none;margin-bottom:8px}
         background:#3a3a3c;border:1px solid #48484a;color:#f2f2f7;font-size:12px}
       #ttml-tool .ttml-btn:hover{background:#48484a}
       #ttml-tool .ttml-log{max-height:150px;overflow:auto;background:#000;
@@ -382,8 +431,10 @@
       if (act === 'scan') scanPage()
       if (act === 'dir') pickDir()
       if (act === 'batch') {
-        const input = prompt('粘贴 Apple Music 歌曲 id（多个用逗号或空格分隔）')
-        if (input) fetchByIds(input)
+        const inp = box.querySelector('.ttml-ids')
+        const v = ((inp && inp.value) || '').trim()
+        if (!v) { log('先在输入框里填歌曲 id'); return }
+        fetchByIds(v)
       }
       if (act === 'toggle') {
         enabled = !enabled
