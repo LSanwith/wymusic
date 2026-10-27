@@ -7,6 +7,10 @@ on:
   schedule:
     - cron: "0 4 * * *" # 每天 12:00（UTC+8）
   workflow_dispatch:
+  # 工作流自己改动时也跑一次，方便验证
+  push:
+    paths:
+      - ".github/workflows/sync.yml"
 
 # 同一时间只跑一个，避免两次同步互相打架
 concurrency:
