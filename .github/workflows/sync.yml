@@ -5,32 +5,67 @@ permissions:
 
 on:
   schedule:
-    - cron: "0 4 * * *" # At 12PM UTC+8
+    - cron: "0 4 * * *" # 每天 12:00（UTC+8）
   workflow_dispatch:
+
+# 同一时间只跑一个，避免两次同步互相打架
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
 
 jobs:
   sync_latest_from_upstream:
     name: Sync latest commits from upstream repo
     runs-on: ubuntu-latest
     if: ${{ github.event.repository.fork }}
-
     steps:
-      # Step 1: run a standard checkout action
       - name: Checkout target repo
-        uses: actions/checkout@v6
-
-      # Step 2: run the sync action
-      - name: Sync upstream changes
-        id: sync
-        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4.3
+        uses: actions/checkout@v4
         with:
-          upstream_sync_repo: NeteaseCloudMusicApiEnhanced/api-enhanced
-          upstream_sync_branch: main
-          target_sync_branch: main
-          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Sync check
-        if: failure()
+      - name: Sync upstream changes
         run: |
-          echo "[Error] Due to a change in the workflow file of the upstream repository, GitHub has automatically suspended the scheduled automatic update. You need to manually sync your fork."
-          exit 1
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced.git 2>/dev/null || true
+          git fetch --no-tags upstream main
+
+          # 已经很新就直接成功退出（旧版这里会 exit 1，天天报假警）
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "已经包含上游最新提交（$(git rev-parse --short upstream/main)），无需同步"
+            exit 0
+          fi
+
+          echo "上游有新提交，开始合并：$(git rev-parse --short upstream/main)"
+          if git merge --no-edit upstream/main; then
+            git push origin HEAD:main
+            echo "已同步到 $(git rev-parse --short HEAD)"
+            exit 0
+          fi
+
+          # 合并冲突了。pnpm-lock.yaml 是机器生成的，不要人肉解决。
+          unresolved="$(git diff --name-only --diff-filter=U || true)"
+          echo "冲突文件：$unresolved"
+          if [ "$unresolved" != "pnpm-lock.yaml" ]; then
+            echo "::error::出现需要人工处理的冲突，已中止合并"
+            git merge --abort || true
+            exit 1
+          fi
+
+          # 锁文件先取上游那份，再按合并后的 package.json 重新生成。
+          # 不能只取上游的：本仓库多一个 @vercel/blob（TTML 功能要用），
+          # 锁文件必须包含它，否则 Vercel 构建的 --frozen-lockfile 会失败。
+          echo "pnpm-lock.yaml 冲突，取上游版本后重新生成"
+          git checkout --theirs pnpm-lock.yaml
+          git add pnpm-lock.yaml
+
+          corepack enable 2>/dev/null || npm i -g pnpm
+          pnpm install --lockfile-only --ignore-scripts
+          git add pnpm-lock.yaml
+
+          git commit --no-edit
+          git push origin HEAD:main
+          echo "已同步到 $(git rev-parse --short HEAD)"
