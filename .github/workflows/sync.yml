@@ -67,5 +67,13 @@ jobs:
           git add pnpm-lock.yaml
 
           git commit --no-edit
+
+          # 推送前先跑一遍离线单测：上游改动可能和本仓库的定制打架，
+          # 过不了就不推，避免把坏代码发到线上。
+          if [ -f main.test.js ]; then
+            echo "跑离线单测..."
+            pnpm exec mocha -r intelli-espower-loader -t 60000 main.test.js --exit
+          fi
+
           git push origin HEAD:main
           echo "已同步到 $(git rev-parse --short HEAD)"
