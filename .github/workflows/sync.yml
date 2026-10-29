@@ -29,6 +29,9 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Sync upstream changes
         run: |
           set -euo pipefail
@@ -44,36 +47,31 @@ jobs:
           fi
 
           echo "上游有新提交，开始合并：$(git rev-parse --short upstream/main)"
-          if git merge --no-edit upstream/main; then
-            git push origin HEAD:main
-            echo "已同步到 $(git rev-parse --short HEAD)"
-            exit 0
+          if ! git merge --no-edit upstream/main; then
+            # 合并冲突了。pnpm-lock.yaml 是机器生成的，不要人肉解决。
+            unresolved="$(git diff --name-only --diff-filter=U || true)"
+            echo "冲突文件：$unresolved"
+            if [ "$unresolved" != "pnpm-lock.yaml" ]; then
+              echo "::error::出现需要人工处理的冲突，已中止合并"
+              git merge --abort || true
+              exit 1
+            fi
+
+            # 锁文件先取上游那份，再按合并后的 package.json 重新生成。
+            # 不能只取上游的：本仓库多一个 @vercel/blob（TTML 功能要用），
+            # 锁文件必须包含它，否则下面的 --frozen-lockfile 会失败。
+            echo "pnpm-lock.yaml 冲突，取上游版本后重新生成"
+            git checkout --theirs pnpm-lock.yaml
+            git add pnpm-lock.yaml
+            pnpm install --lockfile-only --ignore-scripts
+            git add pnpm-lock.yaml
+            git commit --no-edit
           fi
 
-          # 合并冲突了。pnpm-lock.yaml 是机器生成的，不要人肉解决。
-          unresolved="$(git diff --name-only --diff-filter=U || true)"
-          echo "冲突文件：$unresolved"
-          if [ "$unresolved" != "pnpm-lock.yaml" ]; then
-            echo "::error::出现需要人工处理的冲突，已中止合并"
-            git merge --abort || true
-            exit 1
-          fi
-
-          # 锁文件先取上游那份，再按合并后的 package.json 重新生成。
-          # 不能只取上游的：本仓库多一个 @vercel/blob（TTML 功能要用），
-          # 锁文件必须包含它，否则 Vercel 构建的 --frozen-lockfile 会失败。
-          echo "pnpm-lock.yaml 冲突，取上游版本后重新生成"
-          git checkout --theirs pnpm-lock.yaml
-          git add pnpm-lock.yaml
-
-          corepack enable 2>/dev/null || npm i -g pnpm
-          pnpm install --lockfile-only --ignore-scripts
-          git add pnpm-lock.yaml
-
-          git commit --no-edit
-
-          # 推送前先跑一遍离线单测：上游改动可能和本仓库的定制打架，
-          # 过不了就不推，避免把坏代码发到线上。
+          # 装依赖后跑离线单测，过不了就不推，避免把坏代码发到线上。
+          # 注意必须真的 install：--lockfile-only 只改锁文件、不装 node_modules，
+          # pnpm exec mocha 会因为找不到可执行文件而 exit 1。
+          pnpm install --frozen-lockfile --ignore-scripts
           if [ -f main.test.js ]; then
             echo "跑离线单测..."
             pnpm exec mocha -r intelli-espower-loader -t 60000 main.test.js --exit
