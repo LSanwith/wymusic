@@ -2,9 +2,6 @@ name: Upstream Sync
 
 permissions:
   contents: write
-  # 合并上游会带上 .github/workflows/ 的改动，
-  # 用 GITHUB_TOKEN 推送这类文件必须有 workflows 权限，否则会被拒
-  workflows: write
 
 on:
   schedule:
@@ -32,8 +29,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # 版本要和 ci-check.yml 保持一致（那边用 pnpm 9 校验 --frozen-lockfile），
-      # 否则这里重新生成的锁文件格式对不上，CI 会报 OUTDATED_LOCKFILE。
+      # 版本要和 ci-check.yml 一致（那边用 pnpm 9 校验 --frozen-lockfile）
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
@@ -47,7 +43,7 @@ jobs:
           git remote add upstream https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced.git 2>/dev/null || true
 
           if ! git fetch --no-tags upstream main; then
-            echo "::error::stage=fetch 拉取上游失败（网络或上游仓库地址变了）"
+            echo "::error::stage=fetch 拉取上游失败"
             exit 1
           fi
 
@@ -58,29 +54,48 @@ jobs:
           fi
 
           echo "上游有新提交，开始合并：$(git rev-parse --short upstream/main)"
-          if ! git merge --no-edit upstream/main; then
-            unresolved="$(git diff --name-only --diff-filter=U || true)"
-            echo "冲突文件：$unresolved"
-            if [ "$unresolved" != "pnpm-lock.yaml" ]; then
-              echo "::error::stage=merge 出现需要人工处理的冲突：$unresolved"
-              git merge --abort || true
-              exit 1
-            fi
+          git merge --no-commit --no-ff upstream/main || true
 
-            # 锁文件机器生成，不人肉解决：先取上游那份，再按合并后的
-            # package.json 重新生成（本仓库多一个 @vercel/blob）。
+          # 1) 锁文件冲突：机器生成的不人肉解决，取上游那份后重新生成
+          #    （本仓库多一个 @vercel/blob，纯取上游会被 CI 的 --frozen-lockfile 拒绝）
+          if [ "$(git diff --name-only --diff-filter=U || true)" = "pnpm-lock.yaml" ]; then
             echo "pnpm-lock.yaml 冲突，取上游版本后重新生成"
             git checkout --theirs pnpm-lock.yaml
             git add pnpm-lock.yaml
             if ! pnpm install --lockfile-only --ignore-scripts; then
               echo "::error::stage=lockfile 重新生成 pnpm-lock.yaml 失败"
+              git merge --abort || true
               exit 1
             fi
             git add pnpm-lock.yaml
-            if ! git commit --no-edit; then
-              echo "::error::stage=commit 提交合并结果失败"
-              exit 1
-            fi
+          fi
+
+          # 2) 还有别的冲突就交给人
+          u="$(git diff --name-only --diff-filter=U || true)"
+          if [ -n "$u" ]; then
+            echo "::error::stage=merge 出现需要人工处理的冲突：$u"
+            git merge --abort || true
+            exit 1
+          fi
+
+          # 3) 工作流目录一律保留本仓库的版本。
+          #    GITHUB_TOKEN 无权推送 .github/workflows/ 的改动（GitHub 的硬限制），
+          #    不还原的话 git push 会被拒绝。
+          git checkout HEAD -- .github/workflows/ 2>/dev/null || true
+          git reset -q HEAD -- .github/workflows/ 2>/dev/null || true
+          git clean -qfd .github/workflows/ 2>/dev/null || true
+          git checkout HEAD -- .github/workflows/ 2>/dev/null || true
+          git add -A .github/workflows/ 2>/dev/null || true
+
+          if ! git diff --cached --quiet HEAD -- .github/workflows/; then
+            echo "::error::stage=workflows 无法把 .github/workflows/ 还原成本仓库版本"
+            git merge --abort || true
+            exit 1
+          fi
+
+          if ! git commit --no-edit; then
+            echo "::error::stage=commit 提交合并结果失败"
+            exit 1
           fi
 
           if ! git push origin HEAD:main 2>&1; then
