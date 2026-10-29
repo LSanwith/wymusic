@@ -31,6 +31,9 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
+        with:
+          # 本仓库的 package.json 没有 packageManager 字段，不指定版本 action 会直接失败
+          version: 11.24.0
 
       - name: Sync upstream changes
         run: |
