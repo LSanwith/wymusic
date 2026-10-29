@@ -2,6 +2,9 @@ name: Upstream Sync
 
 permissions:
   contents: write
+  # 合并上游会带上 .github/workflows/ 的改动，
+  # 用 GITHUB_TOKEN 推送这类文件必须有 workflows 权限，否则会被拒
+  workflows: write
 
 on:
   schedule:
@@ -80,8 +83,8 @@ jobs:
             fi
           fi
 
-          if ! git push origin HEAD:main; then
-            echo "::error::stage=push 推送失败（权限或分支保护）"
+          if ! git push origin HEAD:main 2>&1; then
+            echo "::error::stage=push 推送失败，git 原始输出见上"
             exit 1
           fi
           echo "已同步到 $(git rev-parse --short HEAD)"
