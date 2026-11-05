@@ -393,7 +393,17 @@ async function destroyLegacy(songId) {
  * 宁可多发几个请求，也不能让已经删掉的东西一直挂在界面上。
  */
 async function listAll() {
-  const { list } = require('@vercel/blob')
+  const { list, head } = require('@vercel/blob')
+
+  // 这个路径到底还在不在（list 有删除延迟，只信 head）
+  const exists = async (pathname) => {
+    try {
+      await head(pathname)
+      return true
+    } catch {
+      return false
+    }
+  }
 
   // 一次 list 拿全（ttml/ 下面只有三种路径：c/<ttmlId>.ttml、b/<id>--<ttmlId>.json、<id>.ttml）
   // 原来分三次 list 各取一种，每次都是一次往返，在跨区网络下非常贵。
@@ -434,7 +444,12 @@ async function listAll() {
 
   const byId = new Map()
   for (const c of contents) byId.set(c.ttmlId, { ...c, ids: [], orphan: false })
+  // list 理论上不会重复，但万一重复了别让同一个 id 出现两次
+  const seenBind = new Set()
   for (const b of binds) {
+    const bindKey_ = b.songId + '--' + b.ttmlId
+    if (seenBind.has(bindKey_)) continue
+    seenBind.add(bindKey_)
     if (!byId.has(b.ttmlId)) {
       // 绑定还在、内容没了：历史遗留，标出来好清理
       byId.set(b.ttmlId, {
@@ -449,20 +464,49 @@ async function listAll() {
     byId.get(b.ttmlId).ids.push(b.songId)
   }
 
-  const items = [...byId.values()].map((it) => ({
-    ...it,
-    ids: it.ids.sort(),
-  }))
+  // 逐个用 head 复核真的还在。
+  // Vercel Blob 的 list 在删除后有明显延迟（几十秒），
+  // 只看 list 会导致「删掉了、刷新又出现」的幽灵条目。
+  // 全部并发，别一条条等；这样管理页既不会显示幽灵，也不会慢。
+  const entries = [...byId.values()]
+  const alive = await Promise.all(
+    entries.map(async (it) => {
+      const jobs = []
+      jobs.push(
+        it.orphan ? Promise.resolve(false) : exists(contentKey(it.ttmlId)),
+      )
+      for (const id of it.ids) jobs.push(exists(bindKey(id, it.ttmlId)))
+      const flags = await Promise.all(jobs)
+      const contentOk = flags[0]
+      const bindFlags = flags.slice(1)
+      return { it, contentOk, ids: it.ids.filter((_, i) => bindFlags[i]) }
+    }),
+  )
+
+  const items = entries
+    .map((it, i) => ({ ...it, ...alive[i] }))
+    .filter((x) => x.contentOk || x.ids.length)
+    .map((x) => ({
+      ttmlId: x.it.ttmlId,
+      size: x.it.size,
+      uploadedAt: x.it.uploadedAt,
+      url: x.it.url,
+      ids: x.ids.slice().sort(),
+    }))
   items.sort((a, b) =>
     String(b.uploadedAt || '').localeCompare(String(a.uploadedAt || '')),
   )
 
+  // 老格式也复核一遍
+  const legacyAlive = await Promise.all(legacy.map((l) => exists(l.pathname)))
+  const liveLegacy = legacy.filter((_, i) => legacyAlive[i])
+
   return {
     items,
-    legacy,
+    legacy: liveLegacy,
     total: items.length,
-    bindingCount: binds.length,
-    contentCount: contents.length,
+    bindingCount: items.reduce((n, it) => n + it.ids.length, 0),
+    contentCount: items.length,
   }
 }
 
