@@ -234,7 +234,9 @@
                             return;
                         }
                         pending = null;
-                        if (!adminPw()) { del.textContent = '删除这份'; say('删除需要管理密码，先在右上角填上。', 'err'); return; }
+                        del.textContent = '删除这份';
+                        if (!adminPw()) { say('删除需要管理密码，先在右上角填上。', 'err'); return; }
+                        doDestroy(it.ttmlId, del);
                     });
                     acts.appendChild(del);
                     top.appendChild(acts);
@@ -298,7 +300,9 @@
                             return;
                         }
                         pending = null;
-                        if (!adminPw()) { del.textContent = '删除这份'; say('删除需要管理密码，先在右上角填上。', 'err'); return; }
+                        del.textContent = '删除这份';
+                        if (!adminPw()) { say('删除需要管理密码，先在右上角填上。', 'err'); return; }
+                        doDestroyLegacy(it.songId, del);
                     });
                     acts.appendChild(del);
                     top.appendChild(acts);
