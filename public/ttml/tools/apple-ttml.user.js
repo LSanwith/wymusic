@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Apple Music TTML 提取
-// @namespace    https://www.sanwith.cc.cd/ttml/
+// @namespace    https://sanwith.de5.net/ttml/
 // @version      1.2.0
 // @description  从 Apple Music 网页播放器自动提取逐字 TTML 歌词，一首一个 .ttml 文件，只存 TTML 本体
 // @author       Sanwith
