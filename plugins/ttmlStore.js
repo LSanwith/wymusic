@@ -237,16 +237,29 @@ async function save(ids, ttml) {
 
 /** 读取某个歌曲 id 的歌词；不存在返回 null */
 async function load(songId) {
+  // 缓存：读一次要 2 次 Advanced Operations（bindingOf 的 list + readContent 的 head）。
+  // 和 listAll 一样，Hobby 的 2K/月额度扛不住反复读，所以缓存 5 分钟。
+  // 任何写入/删除都会清空。
+  const key = String(songId)
+  const hit = loadCache.get(key)
+  if (hit && Date.now() - hit.at < LOAD_TTL_MS) return hit.data
+
+  let result = null
   const cur = await bindingOf(songId)
   if (cur) {
     const content = await readContent(cur.ttmlId)
-    if (content)
-      return { ...content, ttmlId: cur.ttmlId, songId: String(songId) }
+    if (content) {
+      result = { ...content, ttmlId: cur.ttmlId, songId: String(songId) }
+    }
     // 绑定指向的内容没了，退回去看有没有老数据
   }
-  const legacy = await readLegacy(songId)
-  if (legacy) return { ...legacy, songId: String(songId) }
-  return null
+  if (!result) {
+    const legacy = await readLegacy(songId)
+    if (legacy) result = { ...legacy, songId: String(songId) }
+  }
+
+  loadCache.set(key, { at: Date.now(), data: result })
+  return result
 }
 
 /** 只查元信息（不下载内容），做下载跳转时用 */
@@ -285,6 +298,7 @@ async function stat(songId) {
  * 宁可留一份没人用的内容（几 KB），也不能把还有人用的删掉。
  */
 async function gcContent(ttmlId) {
+  clearListAllCache()
   let users = await bindingsOfTtml(ttmlId)
   if (users.length) return false
   await new Promise((r) => setTimeout(r, 400))
@@ -306,6 +320,7 @@ async function gcContent(ttmlId) {
  * —— 这就是「与 id 解绑，并删掉当前的 TTML」。
  */
 async function unbind(songId, ttmlId) {
+  clearListAllCache()
   const { del, head } = require('@vercel/blob')
 
   // 必须是「歌曲 id + 歌词 id」一对，两个都对得上才动手。
@@ -401,11 +416,16 @@ async function destroyLegacy(songId) {
 // 管理页每次刷新都要 listAll，所以这里缓存 60 秒；
 // 任何写入/删除都会清掉缓存，页面不会看到过期数据。
 let listAllCache = null // { at: number, data: any }
-const LIST_ALL_TTL_MS = 60 * 1000
+const LIST_ALL_TTL_MS = 5 * 60 * 1000
 
-/** 清空 listAll 缓存（写入、删除后调用） */
+// 单个歌曲 id 的读取结果缓存（键是歌曲 id）
+const loadCache = new Map()
+const LOAD_TTL_MS = 5 * 60 * 1000
+
+/** 清空读取缓存（任何写入、删除后调用） */
 function clearListAllCache() {
   listAllCache = null
+  loadCache.clear()
 }
 
 async function listAll() {
