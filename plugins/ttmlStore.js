@@ -560,7 +560,7 @@ async function destroyTtml(ttmlId) {
  */
 function downloadUrl(id) {
   const base = String(
-    process.env.PUBLIC_BASE_URL || 'https://www.sanwith.cc.cd',
+    process.env.PUBLIC_BASE_URL || 'https://sanwith.de5.net',
   ).replace(/\/+$/, '')
   return `${base}/ttml/file?id=${encodeURIComponent(String(id))}`
 }
