@@ -186,6 +186,7 @@ async function readLegacy(songId) {
  *   blocked    true 表示因为冲突没有写入任何东西
  */
 async function save(ids, ttml) {
+  clearListAllCache()
   const { put } = require('@vercel/blob')
   const content = String(ttml == null ? '' : ttml)
   const ttmlId = ttmlIdOf(content)
@@ -371,6 +372,7 @@ async function unbind(songId, ttmlId) {
 
 /** 真删除老格式 ttml/<歌曲id>.ttml（没有 ttmlId 的历史数据） */
 async function destroyLegacy(songId) {
+  clearListAllCache()
   const { head, del } = require('@vercel/blob')
   if (!isValidId(songId)) return { songId, deleted: false }
   try {
@@ -392,7 +394,24 @@ async function destroyLegacy(songId) {
  * 管理页要真实反映现状，所以每条再用 head() 确认一次 ——
  * 宁可多发几个请求，也不能让已经删掉的东西一直挂在界面上。
  */
+// listAll 结果缓存。
+//
+// Vercel Blob 的 Advanced Operations 在 Hobby 计划每月只有 2K，
+// 超了会把整个 store 封锁（403 Your store is blocked）。
+// 管理页每次刷新都要 listAll，所以这里缓存 60 秒；
+// 任何写入/删除都会清掉缓存，页面不会看到过期数据。
+let listAllCache = null // { at: number, data: any }
+const LIST_ALL_TTL_MS = 60 * 1000
+
+/** 清空 listAll 缓存（写入、删除后调用） */
+function clearListAllCache() {
+  listAllCache = null
+}
+
 async function listAll() {
+  if (listAllCache && Date.now() - listAllCache.at < LIST_ALL_TTL_MS) {
+    return listAllCache.data
+  }
   const { list, head } = require('@vercel/blob')
 
   // 这个路径到底还在不在（list 有删除延迟，只信 head）
@@ -464,28 +483,29 @@ async function listAll() {
     byId.get(b.ttmlId).ids.push(b.songId)
   }
 
-  // 逐个用 head 复核真的还在。
-  // Vercel Blob 的 list 在删除后有明显延迟（几十秒），
-  // 只看 list 会导致「删掉了、刷新又出现」的幽灵条目。
-  // 全部并发，别一条条等；这样管理页既不会显示幽灵，也不会慢。
+  // 只复核「内容」还在不在，不再逐个 head 绑定。
+  //
+  // 历史教训：之前为了消灭「删掉了、刷新又出现」的幽灵条目，
+  // 这里对每份内容的每个绑定也做了 head —— 一屏 15 份内容 + 40 个绑定
+  // 就是 55 次 Advanced Operations，Hobby 计划每月只有 2K，
+  // 直接把配额烧穿、store 被 Vercel 封锁（403 Your store is blocked）。
+  //
+  // 现在只查内容（15 次左右），剩下的延迟由两处兜住：
+  //   1. listAll 结果缓存 60 秒，刷新页面不再重复打 Blob；
+  //   2. 删除时立即清缓存，管理页自己的乐观移除也照旧。
   const entries = [...byId.values()]
   const alive = await Promise.all(
     entries.map(async (it) => {
-      const jobs = []
-      jobs.push(
-        it.orphan ? Promise.resolve(false) : exists(contentKey(it.ttmlId)),
-      )
-      for (const id of it.ids) jobs.push(exists(bindKey(id, it.ttmlId)))
-      const flags = await Promise.all(jobs)
-      const contentOk = flags[0]
-      const bindFlags = flags.slice(1)
-      return { it, contentOk, ids: it.ids.filter((_, i) => bindFlags[i]) }
+      const contentOk = it.orphan ? false : await exists(contentKey(it.ttmlId))
+      return { it, contentOk, ids: it.ids }
     }),
   )
 
   const items = entries
     .map((it, i) => ({ ...it, ...alive[i] }))
-    .filter((x) => x.contentOk || x.ids.length)
+    // 内容已经不在的一律不显示 —— 删除后 list 会有延迟，
+    // 只看 list 就会出现「删掉了、刷新又出现」的幽灵条目。
+    .filter((x) => x.contentOk)
     .map((x) => ({
       ttmlId: x.it.ttmlId,
       size: x.it.size,
@@ -501,13 +521,15 @@ async function listAll() {
   const legacyAlive = await Promise.all(legacy.map((l) => exists(l.pathname)))
   const liveLegacy = legacy.filter((_, i) => legacyAlive[i])
 
-  return {
+  const result = {
     items,
     legacy: liveLegacy,
     total: items.length,
     bindingCount: items.reduce((n, it) => n + it.ids.length, 0),
     contentCount: items.length,
   }
+  listAllCache = { at: Date.now(), data: result }
+  return result
 }
 
 /**
@@ -517,6 +539,7 @@ async function listAll() {
  * 按路径精确删，不依赖 list 的完整性做判断。
  */
 async function destroyTtml(ttmlId) {
+  clearListAllCache()
   const { del, head, list } = require('@vercel/blob')
   if (!isValidTtmlId(ttmlId)) {
     return { ttmlId, unbound: [], contentDeleted: false, error: 'ttmlId 非法' }
