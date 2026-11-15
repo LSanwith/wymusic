@@ -2,7 +2,7 @@
 //
 //   GET /file/get?n=<文件名>
 //
-// 把 https://www.sanwith.cc.cd/file/get?n=待机时钟.sb3 302 到 Blob 的真实地址。
+// 把 https://sanwith.de5.net/file/get?n=待机时钟.sb3 302 到 Blob 的真实地址。
 // 好处是分享出去的链接是自己域名下的、短且干净；文件名仍由 Blob 侧的
 // downloadUrl 决定（上传时已关掉随机后缀，所以就是原文件名）。
 //
