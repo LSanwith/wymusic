@@ -664,10 +664,10 @@
                 fetch('/file/verify?_=' + Date.now())
                     .then(function (r) { return r.json(); })
                     .then(function (j) {
-                        verifyOn = !!(j && j.enabled);
+                        // TTML 上传/解绑不再走人机验证（Turnstile 在国内经常加载不出来，
+                        // 会把功能整体卡死）。这里只记下状态，不弹遮罩。
+                        verifyOn = false;
                         siteKey = (j && j.siteKey) || '';
-                        // 本机已有通行证就不用再过一遍；过期了提交时会 403 再弹
-                        if (verifyOn && !getPass()) showGate();
                     })
                     .catch(function () { /* 拿不到配置就按不启用处理 */ });
             })();
