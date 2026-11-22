@@ -10,7 +10,6 @@
 //   结构那一套（行数、时间轴、完整性）+ 与官方歌词的字面重合率。
 // 关键约束：**每一个 id 的歌都必须和歌词对得上**，有一个过不了就整体拒。
 const createOption = require('../util/option.js')
-const { guard } = require('../plugins/filePass.js')
 const store = require('../plugins/ttmlStore.js')
 const review = require('../plugins/ttmlReview.js')
 
@@ -65,9 +64,9 @@ async function fetchLyric(id, query, request) {
 }
 
 module.exports = async (query, request) => {
-  // 这个接口要调网易云接口、还要写 Blob，必须挂人机验证
-  const denied = guard(query)
-  if (denied) return denied
+  // 不挂人机验证：Cloudflare Turnstile 在国内网络下经常加载不出来，
+  // 会让上传彻底不可用。把关改由 ttmlReview 的脚本审核负责
+  // （内容必须和官方歌词高度重合，纯垃圾是过不了的）。
 
   if (!store.hasToken()) {
     return {
