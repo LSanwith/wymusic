@@ -8,7 +8,6 @@
 // 解绑后如果这份 TTML 已经没有任何歌曲 id 在用，内容会被回收
 // （那是「解绑」的副作用，不是独立的删除动作）。
 const store = require('../plugins/ttmlStore.js')
-const filePass = require('../plugins/filePass.js')
 
 const MAX_IDS = 20
 
@@ -24,8 +23,8 @@ function parseIds(raw) {
 }
 
 module.exports = async (query) => {
-  const denied = filePass.guard(query)
-  if (denied) return denied
+  // 同样不挂人机验证：国内加载不出 Turnstile 会让解绑完全不可用。
+  // 解绑需要同时给出歌曲 id 和 ttmlId，猜不出来。
 
   if (!store.hasToken()) {
     return {
