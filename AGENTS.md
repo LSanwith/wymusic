@@ -49,3 +49,15 @@
 - **`docs:check` 校验的是 `public/docs/home.md`（docsify 站点）**，不是 README；脚本默认只处理该文件，换行会被统一为 `\n`、连续空行压缩到 2 行，PR 改动它后记得跑 `pnpm docs:format`。
 - **ESLint 9 flat config**：`eslint.config.js`，风格由 `eslint-plugin-prettier` 强制（2 空格缩进、单引号、分号、`endOfLine: auto`），并 `globalIgnores(['**/public/'])`——`public/` 下的前端页面不参与 lint。
 - **`pnpm-workspace.yaml` 是单包工作区**（`packages: ['.']`），并带 `allowBuilds`（core-js/es5-ext）与 `minimumReleaseAgeExclude` 白名单；改依赖安装行为时先看它。
+
+## TTML 歌词（/ttml/*）
+
+- 存储：Upstash Redis（Vercel 里的 `bmusic-kv`，前缀 `KV` 注入 `KV_REST_API_URL` / `KV_REST_API_TOKEN`）。
+  键前缀 `ttml:`，全部是点查（GET/SET/SADD/SMEMBERS），没有 list 语义，见 `plugins/ttmlStore.js`。
+- 为什么不用 Vercel Blob：Blob 把 list / copy 算 Advanced Operations（Hobby 只有 2K/月），
+  超了会把整个 store 停用（`wymusic-file` 就被停到 2026-12-08），TTML 接口全 403。
+- Blob 时代的老数据：store 恢复后跑一次 `/ttml/migrate?password=<TTML_ADMIN_PASS>`（幂等），
+  把 `ttml/c|b/…` 与老格式 `ttml/<歌曲id>.ttml` 搬进 KV。
+- 管理密码在 `plugins/ttmlAdmin.js`（`TTML_ADMIN_PASS` 优先，否则比代码里的 scrypt 哈希），
+  `/ttml/destroy` 与 `/ttml/migrate` 共用。
+- 单测 `test/ttml_store.test.js` 用假 KV + 假 Blob 离线跑，`pnpm test` 会一起执行，不需要网络和 token。
