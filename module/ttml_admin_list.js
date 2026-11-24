@@ -18,7 +18,8 @@ module.exports = async () => {
 
   let data
   try {
-    data = await store.listAll()
+    // fresh：管理页点刷新就该看到最新结果（索引本身有 5 分钟缓存）
+    data = await store.listAll({ fresh: true })
   } catch (e) {
     return {
       status: 500,

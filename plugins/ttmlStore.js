@@ -1,28 +1,49 @@
 // TTML 歌词存储（Vercel Blob）
 //
-// 核心模型：**歌词内容和歌曲 id 是解耦的**。
-// 一份 TTML 可以绑多个网易云歌曲 id（同一首歌的多个版本、多区发行等），
-// 内容只存一份，用内容自己的身份 id（内容哈希）标识。
+// 数据结构（2026-11 改版）
+//   ttml/index.json                 目录：哪份歌词绑了哪些歌曲 id —— 所有查找的唯一入口
+//   ttml/c/<ttmlId>.ttml            歌词正文，按内容哈希命名，同样内容只存一份
+//   ttml/b/<歌曲id>--<ttmlId>.json  绑定的「纸面存档」，只为索引万一丢了能重建，读的时候不看
+//   ttml/<歌曲id>.ttml              早期格式，仍然能读、能删
 //
-//   ttml/c/<ttmlId>.ttml          歌词内容，只存一份；ttmlId = 内容的 sha256 前 16 位
-//   ttml/b/<歌曲id>--<ttmlId>.json 绑定关系，内容为空占位，信息全在文件名里
+// 为什么要这份索引：
+//   Vercel Blob 把 list / copy 算成 Advanced Operations —— Hobby 计划每月只有 2K 次。
+//   上一版每次读歌词都 list 一次，管理页刷新还要再 head 几十次，
+//   额度几天就烧穿，store 会被 Vercel 直接封掉（403 Your store is blocked）。
+//   现在查找全走索引：
+//     读 = 一次 get（Simple Operation，共 10K/月，并且有内存缓存）
+//     写 = put 内容 + put 存档 + put 索引
+//   只有索引不存在时才会 list 一次（1 次 Advanced Operation）把它建起来。
 //
-// 为什么绑定关系放在**文件名**里：
-//   - 判断「这个 ttmlId 还有没有别的 id 在用」，只要 list 一次前缀、看文件名，
-//     不用把每个绑定文件都下载下来
-//   - 读取某个歌曲 id 的歌词，也只要 list 一次前缀，不用额外读文件
+// 索引的一致性：
+//   - 读：进程内缓存 5 分钟；写操作会把本进程的缓存立刻更新。
+//   - 写：read-modify-write，用 Blob 的 ETag 做乐观锁（ifMatch），
+//         并发写撞车时自动重读重试，不会把别人的绑定覆盖掉。
+//   - 索引丢了：ttml/b/ 下的存档还在，下次读的时候会自动 list 一次重建。
 //
-// 对外仍然是按歌曲 id 请求（/search?ttml=<歌曲id>），
-// 但响应里会带上 ttmlId —— 它就是这份歌词的身份，换 id 绑也不变。
-//
-// 兼容老数据：早期版本是 ttml/<歌曲id>.ttml（一个 id 一份副本），
-// 读到就照常能读、能删。
+// 对外仍然是一切按歌曲 id 访问（/search?ttml=<歌曲id>），
+// 响应里的 ttmlId 是内容自己的身份（内容哈希），换 id 绑也不变。
 const crypto = require('crypto')
 
 const PREFIX = 'ttml/'
 const CONTENT_PREFIX = PREFIX + 'c/'
 const BIND_PREFIX = PREFIX + 'b/'
 const LEGACY_SUFFIX = '.ttml'
+const INDEX_KEY = PREFIX + 'index.json'
+const INDEX_VERSION = 1
+
+/** 索引在进程内缓存多久。读一次只要 1 次 Simple Operation，但没必要每个请求都读 */
+const INDEX_TTL_MS = 5 * 60 * 1000
+/** 正文缓存上限（按份数算，一般只有几十份，留够余量） */
+const CONTENT_CACHE_MAX = 300
+
+const CONTENT_RE = /^ttml\/c\/([0-9a-f]{16})\.ttml$/
+const BIND_RE = /^ttml\/b\/(\d+)--([0-9a-f]{16})\.json$/
+const LEGACY_RE = /^ttml\/(\d+)\.ttml$/
+
+let indexCache = null // { at, etag, data }
+const contentCache = new Map() // ttmlId -> { ttml, size, uploadedAt, url }
+const legacyCache = new Map() // songId -> { ttml, ttmlId, url, size, uploadedAt }
 
 /** 网易云歌曲 id 都是纯数字 */
 function isValidId(id) {
@@ -51,7 +72,6 @@ function legacyKey(songId) {
  * 由歌词内容算出它的身份 id。
  * 空白全部折叠成一个空格再算 —— 只是换了缩进/换行/排版不该算出两个身份，
  * 否则「内容没变，只是重新格式化」就能绕过重复检测。
- * （TTML 对显示是空白敏感的，但那只影响展示，不影响「这是不是同一份歌词」）
  */
 function ttmlIdOf(ttml) {
   const canon = String(ttml == null ? '' : ttml)
@@ -68,220 +88,514 @@ function hasToken() {
   return !!process.env.BLOB_READ_WRITE_TOKEN
 }
 
-/** 列某个歌曲 id 的所有绑定（可能不止一条，理论上应该只有一条） */
-async function listBindings(songId) {
-  const { list } = require('@vercel/blob')
-  const prefix = BIND_PREFIX + String(songId) + '--'
-  const out = []
-  let cursor
-  do {
-    const page = await list({ prefix, cursor, limit: 100 })
-    for (const b of page.blobs || []) {
-      const m = /^ttml\/b\/(\d+)--([0-9a-f]{16})\.json$/.exec(b.pathname)
-      if (m && m[1] === String(songId)) {
-        out.push({ pathname: b.pathname, url: b.url, ttmlId: m[2] })
-      }
-    }
-    cursor = page.cursor
-  } while (cursor)
-  return out
+/** 把 Blob 的返回（web stream / node stream）读成字符串 */
+async function streamToText(stream) {
+  if (!stream) return ''
+  if (typeof stream.getReader === 'function') {
+    return new Response(stream).text()
+  }
+  const chunks = []
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk))
+  return Buffer.concat(chunks).toString('utf8')
 }
 
-/** 取某个歌曲 id 当前绑定的内容 id */
-async function bindingOf(songId) {
-  const all = await listBindings(songId)
-  return all.length ? all[0] : null
+/** Blob 的错误类型都是从 BlobError 派生的，这里按 name 判断，避免 require 曲线救国 */
+function isBlobErrorNamed(e, name) {
+  return !!e && (e.name === name || e.constructor?.name === name)
+}
+
+function isNotFound(e) {
+  return (
+    isBlobErrorNamed(e, 'BlobNotFoundError') ||
+    /not.?found|does not exist/i.test(String((e && e.message) || ''))
+  )
+}
+
+function isPreconditionFailed(e) {
+  return (
+    isBlobErrorNamed(e, 'BlobPreconditionFailedError') ||
+    /precondition/i.test(String((e && e.message) || ''))
+  )
+}
+
+/** 索引里一条内容的形状 */
+function makeEntry(ttmlId) {
+  return {
+    ids: [],
+    size: null,
+    uploadedAt: null,
+    url: null,
+    pathname: contentKey(ttmlId),
+  }
 }
 
 /**
- * 精确判断「某个歌曲 id 是否绑着某一份歌词」。
- *
- * 直接用 head 查那条绑定的路径，不走 list —— list 是最终一致的，
- * 刚绑上可能查不到，会导致「重复提交拦不住」或者更糟的「解绑解错」。
- * 查重和解绑都以这个判断为准。
+ * 把任意来源的索引整理成统一形状。
+ * 坏数据（少字段、id 不合法、重复）全部就地修掉，调用方拿到的永远能直接用。
  */
-async function isBound(songId, ttmlId) {
-  const { head } = require('@vercel/blob')
-  if (!isValidId(songId) || !isValidTtmlId(ttmlId)) return false
-  try {
-    const meta = await head(bindKey(String(songId), String(ttmlId)))
-    return !!(meta && meta.url)
-  } catch {
-    return false
+function normalizeIndex(raw) {
+  const doc = {
+    v: INDEX_VERSION,
+    updatedAt: String((raw && raw.updatedAt) || ''),
+    contents: {},
+    legacy: {},
+  }
+
+  const contents =
+    raw && raw.contents && typeof raw.contents === 'object' ? raw.contents : {}
+  for (const [key, value] of Object.entries(contents)) {
+    if (!isValidTtmlId(key) || !value || typeof value !== 'object') continue
+    const ids = Array.isArray(value.ids)
+      ? [...new Set(value.ids.map(String).filter(isValidId))]
+      : []
+    doc.contents[key] = {
+      ids,
+      size: Number.isFinite(value.size) ? value.size : null,
+      uploadedAt: value.uploadedAt || null,
+      url: value.url || null,
+      pathname: value.pathname || contentKey(key),
+    }
+  }
+
+  const legacy =
+    raw && raw.legacy && typeof raw.legacy === 'object' ? raw.legacy : {}
+  for (const [key, value] of Object.entries(legacy)) {
+    if (!isValidId(key) || !value || typeof value !== 'object') continue
+    doc.legacy[key] = {
+      songId: String(key),
+      pathname: value.pathname || legacyKey(key),
+      url: value.url || null,
+      size: Number.isFinite(value.size) ? value.size : null,
+      uploadedAt: value.uploadedAt || null,
+    }
+  }
+
+  return doc
+}
+
+function cloneIndex(doc) {
+  return {
+    v: doc.v,
+    updatedAt: doc.updatedAt,
+    contents: JSON.parse(JSON.stringify(doc.contents || {})),
+    legacy: JSON.parse(JSON.stringify(doc.legacy || {})),
   }
 }
 
-/** 某个内容 id 还被哪些歌曲 id 绑着 */
-async function bindingsOfTtml(ttmlId) {
+/** 这个歌曲 id 现在绑在哪个 ttmlId 上（没有就 null） */
+function ttmlIdOfSong(doc, songId) {
+  const id = String(songId == null ? '' : songId)
+  for (const [ttmlId, entry] of Object.entries(doc.contents)) {
+    if (entry.ids.includes(id)) return ttmlId
+  }
+  return null
+}
+
+/** 清空进程内缓存（测试与排障用） */
+function clearCaches() {
+  indexCache = null
+  contentCache.clear()
+  legacyCache.clear()
+}
+
+/** 从 Blob 读索引本体；不存在返回 null（404 不当错误） */
+async function fetchIndexRemote() {
+  const { get } = require('@vercel/blob')
+  let res
+  try {
+    res = await get(INDEX_KEY, { access: 'public', useCache: false })
+  } catch (e) {
+    if (isNotFound(e)) return null
+    throw e
+  }
+  if (!res || !res.stream) {
+    // 304：内容没变，直接沿用缓存（正常不会走到，防御一下）
+    return res && res.statusCode === 304 && indexCache
+      ? { data: indexCache.data, etag: indexCache.etag }
+      : null
+  }
+  const text = await streamToText(res.stream)
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    // 坏掉的索引不能当成「空索引」用 —— 那会在下一次写入时把真实数据抹掉。
+    // 交给上层按「索引不存在」处理：从 ttml/b/ 存档重建一份。
+    return { data: null, etag: (res.blob && res.blob.etag) || null }
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return { data: null, etag: (res.blob && res.blob.etag) || null }
+  }
+  return {
+    data: normalizeIndex(parsed),
+    etag: (res.blob && res.blob.etag) || null,
+  }
+}
+
+/**
+ * 从 store 里扫一遍把索引建起来。
+ * 这是整个模块唯一会用到 list（Advanced Operation）的地方，只在索引不存在时跑。
+ */
+async function buildIndexFromStore() {
   const { list } = require('@vercel/blob')
-  const suffix = '--' + ttmlId + '.json'
-  const out = []
+  const doc = normalizeIndex(null)
   let cursor
   do {
-    const page = await list({ prefix: BIND_PREFIX, cursor, limit: 200 })
-    for (const b of page.blobs || []) {
-      if (b.pathname.endsWith(suffix)) {
-        const m = /^ttml\/b\/(\d+)--/.exec(b.pathname)
-        if (m) out.push(m[1])
+    const page = await list({ prefix: PREFIX, cursor, limit: 500 })
+    for (const blob of page.blobs || []) {
+      const pathname = String(blob.pathname || '')
+      let m
+      if ((m = CONTENT_RE.exec(pathname))) {
+        doc.contents[m[1]] = {
+          ids: doc.contents[m[1]] ? doc.contents[m[1]].ids : [],
+          size: blob.size || null,
+          uploadedAt: blob.uploadedAt || null,
+          url: blob.url || null,
+          pathname,
+        }
+      } else if ((m = BIND_RE.exec(pathname))) {
+        const entry = doc.contents[m[2]] || makeEntry(m[2])
+        if (!entry.ids.includes(m[1])) entry.ids.push(m[1])
+        doc.contents[m[2]] = entry
+      } else if ((m = LEGACY_RE.exec(pathname))) {
+        doc.legacy[m[1]] = {
+          songId: m[1],
+          pathname,
+          url: blob.url || null,
+          size: blob.size || null,
+          uploadedAt: blob.uploadedAt || null,
+        }
       }
     }
-    cursor = page.cursor
+    cursor = page.hasMore ? page.cursor : undefined
   } while (cursor)
-  return out
+  return doc
 }
 
-/** 读内容（不存在返回 null） */
-async function readContent(ttmlId) {
-  const { head } = require('@vercel/blob')
-  let meta
-  try {
-    meta = await head(contentKey(ttmlId))
-  } catch {
-    return null
+/** 写索引。etag 有值就用条件写（乐观锁），撞车会抛 BlobPreconditionFailedError */
+async function writeIndex(doc, etag) {
+  const { put } = require('@vercel/blob')
+  const next = { ...doc, v: INDEX_VERSION, updatedAt: new Date().toISOString() }
+  const body = JSON.stringify(next)
+  const options = {
+    access: 'public',
+    contentType: 'application/json; charset=utf-8',
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    // 索引会被频繁覆盖，别让 CDN 缓存太久；读取本来也是绕过缓存读的
+    cacheControlMaxAge: 60,
   }
-  if (!meta || !meta.url) return null
-  const res = await fetch(meta.url)
-  if (!res.ok) return null
-  return {
-    ttml: await res.text(),
-    url: meta.url,
-    size: meta.size,
-    uploadedAt: meta.uploadedAt,
+  if (etag) options.ifMatch = etag
+  const res = await put(INDEX_KEY, body, options)
+  // 存一份克隆：调用方拿到的 draft 之后不会再被改，但缓存和它共用对象迟早出岔子
+  indexCache = {
+    at: Date.now(),
+    etag: res.etag || null,
+    data: cloneIndex(next),
   }
+  return next
 }
 
-/** 读老版本数据（ttml/<歌曲id>.ttml） */
-async function readLegacy(songId) {
-  const { head } = require('@vercel/blob')
-  let meta
-  try {
-    meta = await head(legacyKey(songId))
-  } catch {
-    return null
+/** 读索引（带进程内缓存）。fresh=true 时强制重读 */
+async function readIndex(options) {
+  const fresh = !!(options && options.fresh)
+  if (!fresh && indexCache && Date.now() - indexCache.at < INDEX_TTL_MS) {
+    return indexCache
   }
-  if (!meta || !meta.url) return null
-  const res = await fetch(meta.url)
-  if (!res.ok) return null
-  const ttml = await res.text()
-  return {
-    ttml,
-    ttmlId: ttmlIdOf(ttml),
-    url: meta.url,
-    size: meta.size,
-    uploadedAt: meta.uploadedAt,
+
+  const remote = await fetchIndexRemote()
+  if (remote && remote.data) {
+    indexCache = { at: Date.now(), etag: remote.etag, data: remote.data }
+    return indexCache
+  }
+
+  // 索引不存在（第一次部署 / 被手动删了）：扫一遍重建
+  const built = await buildIndexFromStore()
+  await writeIndex(built, null)
+  return indexCache
+}
+
+/**
+ * 对索引做一次「读 → 改 → 写」，撞车就重试。
+ * mutator 返回 { abort: ... } 表示这次不该写（比如发现冲突）。
+ */
+async function mutateIndex(mutator) {
+  let lastError = null
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const current = await readIndex({ fresh: attempt > 0 })
+    const draft = cloneIndex(current.data)
+    const outcome = await mutator(draft)
+    if (outcome && outcome.abort) {
+      return { ok: false, abort: outcome.abort }
+    }
+    try {
+      const saved = await writeIndex(draft, current.etag)
+      return { ok: true, index: saved, outcome }
+    } catch (e) {
+      if (!isPreconditionFailed(e)) throw e
+      // 别的实例刚改过索引：等一小下再重读重试
+      lastError = e
+      await new Promise((r) => setTimeout(r, 40 + attempt * 60))
+    }
+  }
+  throw lastError || new Error('索引更新冲突，请重试')
+}
+
+/** 带缓存的正文读取：先走 CDN 地址，读不到再回源（都只要 0～1 次 Simple Operation） */
+async function readContent(ttmlId, entry) {
+  const cached = contentCache.get(ttmlId)
+  if (cached) return cached
+
+  let text = null
+  let url = (entry && entry.url) || null
+  if (url) {
+    try {
+      const res = await fetch(url)
+      if (res.ok) text = await res.text()
+    } catch {
+      /* 地址失效就回源 */
+    }
+  }
+  if (text == null) {
+    const { get } = require('@vercel/blob')
+    let res = null
+    try {
+      res = await get(contentKey(ttmlId), { access: 'public', useCache: false })
+    } catch (e) {
+      if (!isNotFound(e)) throw e
+    }
+    if (!res || !res.stream) return null
+    text = await streamToText(res.stream)
+    if (res.blob && res.blob.url) url = res.blob.url
+  }
+
+  const data = {
+    ttml: text,
+    size: Buffer.byteLength(text, 'utf8'),
+    uploadedAt: (entry && entry.uploadedAt) || null,
+    url: url || null,
+  }
+  if (contentCache.size >= CONTENT_CACHE_MAX) {
+    const oldest = contentCache.keys().next().value
+    if (oldest) contentCache.delete(oldest)
+  }
+  contentCache.set(ttmlId, data)
+  return data
+}
+
+/** 读老格式（ttml/<歌曲id>.ttml）。索引里没这条记录就直接当没有，不再 head 探一次 */
+async function readLegacy(songId, entry) {
+  const id = String(songId)
+  const cached = legacyCache.get(id)
+  if (cached) return cached
+
+  // 索引建立时扫过整个 ttml/ 前缀，有老格式文件就一定在 legacy 里。
+  // 所以「索引没记录」= 没有，不必为每个「查不到歌词」的请求再付一次 head。
+  if (!entry) return null
+
+  let url = entry.url || null
+  if (!url) {
+    const { head } = require('@vercel/blob')
+    try {
+      const meta = await head(legacyKey(id))
+      if (!meta || !meta.url) return null
+      url = meta.url
+    } catch {
+      return null
+    }
+  }
+
+  let text = null
+  try {
+    const res = await fetch(url)
+    if (res.ok) text = await res.text()
+  } catch {
+    /* fallthrough */
+  }
+  if (text == null) {
+    const { get } = require('@vercel/blob')
+    try {
+      const res = await get(legacyKey(id), {
+        access: 'public',
+        useCache: false,
+      })
+      if (!res || !res.stream) return null
+      text = await streamToText(res.stream)
+    } catch {
+      return null
+    }
+  }
+
+  const data = {
+    ttml: text,
+    ttmlId: ttmlIdOf(text),
+    url,
+    size: Buffer.byteLength(text, 'utf8'),
+    uploadedAt: (entry && entry.uploadedAt) || null,
     legacy: true,
   }
+  legacyCache.set(id, data)
+  return data
+}
+
+/** 在索引里找某个歌曲 id 绑的内容 */
+function contentOfSong(doc, songId) {
+  const id = String(songId)
+  for (const [ttmlId, entry] of Object.entries(doc.contents)) {
+    if (entry.ids.includes(id)) return { ttmlId, entry }
+  }
+  return null
 }
 
 /**
- * 保存：内容只写一份，再给每个歌曲 id 建立绑定。
+ * 保存：内容只写一份，再给每个歌曲 id 建绑定。
  *
  * **歌曲 id 为准**：一个 id 同一时间只能绑一份歌词。
  * 如果它已经绑在别的 TTML 上，这里直接判冲突、什么都不写 ——
  * 必须先显式解绑（/ttml/unbind，歌曲 id + ttmlId 配对）再绑新的。
- * 这样可以避免「换个内容重新提交」把别人的绑定悄悄覆盖掉。
  *
  * 返回 { ttmlId, url, bound, already, conflicts, blocked }
- *   conflicts  [{ id, boundTo }] 已有绑定冲突的 id
- *   blocked    true 表示因为冲突没有写入任何东西
  */
 async function save(ids, ttml) {
-  clearListAllCache()
-  const { put } = require('@vercel/blob')
   const content = String(ttml == null ? '' : ttml)
   const ttmlId = ttmlIdOf(content)
+  const wantIds = [...new Set(ids.map(String))]
 
-  // 先体检再写：不允许静默改绑
+  // 1) 体检：已经绑在这份上的算 already，绑在别人身上的直接拒
+  const snapshot = await readIndex()
   const already = []
   const conflicts = []
-  for (const id of ids) {
-    if (await isBound(id, ttmlId)) {
-      already.push(id)
-      continue
-    }
-    const cur = await bindingOf(id)
-    if (cur && cur.ttmlId !== ttmlId) {
-      conflicts.push({ id: String(id), boundTo: cur.ttmlId })
-    }
+  for (const id of wantIds) {
+    const current = ttmlIdOfSong(snapshot.data, id)
+    if (!current) continue
+    if (current === ttmlId) already.push(id)
+    else conflicts.push({ id, boundTo: current })
   }
   if (conflicts.length) {
     return { ttmlId, url: null, bound: [], already, conflicts, blocked: true }
   }
 
-  // 内容同 id 覆盖写：同内容天然幂等
-  const res = await put(contentKey(ttmlId), content, {
+  const fresh = wantIds.filter((id) => !already.includes(id))
+  const { put } = require('@vercel/blob')
+
+  // 2) 正文：按内容 id 命名，同内容重复写天然幂等
+  const stored = await put(contentKey(ttmlId), content, {
     access: 'public',
     contentType: 'application/ttml+xml; charset=utf-8',
     allowOverwrite: true,
     addRandomSuffix: false,
   })
 
-  const bound = []
-  for (const id of ids) {
-    if (already.includes(id)) continue
-    await put(
-      bindKey(id, ttmlId),
-      JSON.stringify({ songId: String(id), ttmlId }),
-      {
+  // 3) 索引：并发写会被 ifMatch 挡住并重试，冲突在 mutator 里再查一遍
+  const written = await mutateIndex((draft) => {
+    const bad = []
+    for (const id of wantIds) {
+      const current = ttmlIdOfSong(draft, id)
+      if (current && current !== ttmlId) bad.push({ id, boundTo: current })
+    }
+    if (bad.length) return { abort: { conflicts: bad } }
+
+    const entry = draft.contents[ttmlId] || makeEntry(ttmlId)
+    entry.ids = [...new Set([...(entry.ids || []), ...wantIds])]
+    entry.size = Buffer.byteLength(content, 'utf8')
+    entry.uploadedAt = entry.uploadedAt || new Date().toISOString()
+    entry.url = stored.url || entry.url || null
+    entry.pathname = contentKey(ttmlId)
+    draft.contents[ttmlId] = entry
+    return null
+  })
+
+  if (!written.ok) {
+    return {
+      ttmlId,
+      url: null,
+      bound: [],
+      already,
+      conflicts: (written.abort && written.abort.conflicts) || [],
+      blocked: true,
+    }
+  }
+
+  // 4) 纸面存档：绑定文件。索引已经写成功了才写它 ——
+  //    它只是「索引丢了还能重建」的保险，写失败不该让提交失败。
+  try {
+    for (const id of fresh) {
+      await put(bindKey(id, ttmlId), JSON.stringify({ songId: id, ttmlId }), {
         access: 'public',
         contentType: 'application/json',
         allowOverwrite: true,
         addRandomSuffix: false,
-      },
-    )
-    bound.push(id)
+      })
+    }
+  } catch {
+    /* 存档失败不影响这次提交，下次重建索引时会少这一条，内容仍在 */
   }
 
-  return { ttmlId, url: res.url, bound, already, conflicts: [], blocked: false }
+  contentCache.set(ttmlId, {
+    ttml: content,
+    size: Buffer.byteLength(content, 'utf8'),
+    uploadedAt: written.index.contents[ttmlId]
+      ? written.index.contents[ttmlId].uploadedAt
+      : null,
+    url: stored.url,
+  })
+
+  return {
+    ttmlId,
+    url: stored.url,
+    bound: fresh,
+    already,
+    conflicts: [],
+    blocked: false,
+  }
 }
 
 /** 读取某个歌曲 id 的歌词；不存在返回 null */
 async function load(songId) {
-  // 缓存：读一次要 2 次 Advanced Operations（bindingOf 的 list + readContent 的 head）。
-  // 和 listAll 一样，Hobby 的 2K/月额度扛不住反复读，所以缓存 5 分钟。
-  // 任何写入/删除都会清空。
-  const key = String(songId)
-  const hit = loadCache.get(key)
-  if (hit && Date.now() - hit.at < LOAD_TTL_MS) return hit.data
-
-  let result = null
-  const cur = await bindingOf(songId)
-  if (cur) {
-    const content = await readContent(cur.ttmlId)
+  const index = await readIndex()
+  const hit = contentOfSong(index.data, String(songId))
+  if (hit) {
+    const content = await readContent(hit.ttmlId, hit.entry)
     if (content) {
-      result = { ...content, ttmlId: cur.ttmlId, songId: String(songId) }
+      return { ...content, ttmlId: hit.ttmlId, songId: String(songId) }
     }
-    // 绑定指向的内容没了，退回去看有没有老数据
   }
-  if (!result) {
-    const legacy = await readLegacy(songId)
-    if (legacy) result = { ...legacy, songId: String(songId) }
-  }
-
-  loadCache.set(key, { at: Date.now(), data: result })
-  return result
+  // 绑定指向的内容没了，退回去看有没有老数据
+  const legacy = await readLegacy(songId, index.data.legacy[String(songId)])
+  if (legacy) return { ...legacy, songId: String(songId) }
+  return null
 }
 
 /** 只查元信息（不下载内容），做下载跳转时用 */
 async function stat(songId) {
-  const cur = await bindingOf(songId)
-  if (cur) {
+  const index = await readIndex()
+  const hit = contentOfSong(index.data, String(songId))
+  if (hit) {
+    if (hit.entry.url) {
+      return {
+        url: hit.entry.url,
+        size: hit.entry.size,
+        uploadedAt: hit.entry.uploadedAt,
+        ttmlId: hit.ttmlId,
+      }
+    }
+    // 索引里没有地址（从存档重建的）：补一次 head，只有 1 次 Simple Operation
     const { head } = require('@vercel/blob')
     try {
-      const meta = await head(contentKey(cur.ttmlId))
+      const meta = await head(contentKey(hit.ttmlId))
       if (meta && meta.url) {
         return {
           url: meta.url,
           size: meta.size,
           uploadedAt: meta.uploadedAt,
-          ttmlId: cur.ttmlId,
+          ttmlId: hit.ttmlId,
         }
       }
     } catch {
       /* 继续看老数据 */
     }
   }
-  const legacy = await readLegacy(songId)
+  const legacy = await readLegacy(songId, index.data.legacy[String(songId)])
   if (!legacy) return null
   return {
     url: legacy.url,
@@ -291,41 +605,20 @@ async function stat(songId) {
   }
 }
 
-/**
- * 如果没有别的歌曲 id 再绑这份内容，就把内容删掉。
- *
- * list 是最终一致的：刚建好的绑定可能查不到。所以查两遍、中间隔一下，
- * 宁可留一份没人用的内容（几 KB），也不能把还有人用的删掉。
- */
-async function gcContent(ttmlId) {
-  clearListAllCache()
-  let users = await bindingsOfTtml(ttmlId)
-  if (users.length) return false
-  await new Promise((r) => setTimeout(r, 400))
-  users = await bindingsOfTtml(ttmlId)
-  if (users.length) return false
-  const { head, del } = require('@vercel/blob')
-  try {
-    const meta = await head(contentKey(ttmlId))
-    if (meta && meta.url) await del(meta.url)
-    return true
-  } catch {
-    return false
-  }
+/** 这个歌曲 id 是否绑着这份歌词 */
+async function isBound(songId, ttmlId) {
+  if (!isValidId(songId) || !isValidTtmlId(ttmlId)) return false
+  const index = await readIndex()
+  return ttmlIdOfSong(index.data, songId) === ttmlId
 }
 
 /**
  * 解绑：把某个歌曲 id 从歌词上摘下来。
- * 如果摘完这份歌词已经没有任何 id 在用，就连内容一起删掉
- * —— 这就是「与 id 解绑，并删掉当前的 TTML」。
+ * 如果摘完这份歌词已经没有任何 id 在用，就连内容一起删掉。
  */
 async function unbind(songId, ttmlId) {
-  clearListAllCache()
-  const { del, head } = require('@vercel/blob')
-
-  // 必须是「歌曲 id + 歌词 id」一对，两个都对得上才动手。
-  // 只给歌曲 id 就解绑等于盲删，只给歌词 id 就会一次解掉一堆 —— 都不允许。
-  if (!isValidId(songId) || !isValidTtmlId(ttmlId)) {
+  const id = String(songId)
+  if (!isValidId(id) || !isValidTtmlId(ttmlId)) {
     return {
       unbound: false,
       ttmlId,
@@ -334,272 +627,228 @@ async function unbind(songId, ttmlId) {
     }
   }
 
-  // 新模型：绑定文件本身就是一个确定的路径，直接删
-  if (await isBound(songId, ttmlId)) {
-    try {
-      const meta = await head(bindKey(songId, ttmlId))
-      if (meta && meta.url) await del(meta.url)
-    } catch (e) {
-      return {
-        unbound: false,
-        ttmlId,
-        contentDeleted: false,
-        error: '解绑失败：' + (e.message || e),
-      }
+  let removedLast = false
+  const written = await mutateIndex((draft) => {
+    const entry = draft.contents[ttmlId]
+    if (!entry || !entry.ids.includes(id))
+      return { abort: { reason: 'missing' } }
+    entry.ids = entry.ids.filter((x) => x !== id)
+    if (entry.ids.length) {
+      draft.contents[ttmlId] = entry
+      return null
     }
-    // 同一个 id 若因历史原因还挂着别的绑定，一并清掉
-    for (const extra of await listBindings(songId)) {
-      if (extra.ttmlId === ttmlId) continue
+    delete draft.contents[ttmlId]
+    removedLast = true
+    return null
+  })
+
+  if (!written.ok) {
+    // 新模型里没有这条绑定：可能是老格式（ttml/<歌曲id>.ttml）
+    const snapshot = await readIndex()
+    const legacy = await readLegacy(id, snapshot.data.legacy[id])
+    if (legacy && legacy.ttmlId === ttmlId) {
       try {
-        await del(extra.url)
-        await gcContent(extra.ttmlId)
-      } catch {
-        /* 忽略 */
+        const { del } = require('@vercel/blob')
+        await del(legacyKey(id))
+        await mutateIndex((draft) => {
+          delete draft.legacy[id]
+          return null
+        })
+        legacyCache.delete(id)
+        return { unbound: true, ttmlId, contentDeleted: true, legacy: true }
+      } catch (e) {
+        return {
+          unbound: false,
+          ttmlId,
+          contentDeleted: false,
+          error: '解绑失败：' + (e.message || e),
+        }
       }
     }
-    const contentDeleted = await gcContent(ttmlId)
-    return { unbound: true, ttmlId, contentDeleted }
-  }
-
-  // 老模型：ttml/<歌曲id>.ttml —— 内容算出来的 id 必须与给的 ttmlId 一致
-  const legacy = await readLegacy(songId)
-  if (legacy && legacy.ttmlId === ttmlId) {
-    try {
-      await del(legacy.url)
-      return { unbound: true, ttmlId, contentDeleted: true, legacy: true }
-    } catch (e) {
-      return {
-        unbound: false,
-        ttmlId,
-        contentDeleted: false,
-        error: '解绑失败：' + (e.message || e),
-      }
+    return {
+      unbound: false,
+      ttmlId,
+      contentDeleted: false,
+      error: '这个歌曲 id 并没有绑在这份 TTML 上（ttmlId 对不上）',
     }
   }
 
-  return {
-    unbound: false,
-    ttmlId,
-    contentDeleted: false,
-    error: '这个歌曲 id 并没有绑在这份 TTML 上（ttmlId 对不上）',
+  // 索引已经先让步了，再删文件：删失败只会留个孤儿，不影响读
+  const { del } = require('@vercel/blob')
+  const doomed = [bindKey(id, ttmlId)]
+  if (removedLast) doomed.push(contentKey(ttmlId))
+  try {
+    await del(doomed)
+  } catch {
+    /* 删不掉就留着，下次 GC 会处理 */
   }
+  if (removedLast) contentCache.delete(ttmlId)
+
+  return { unbound: true, ttmlId, contentDeleted: removedLast }
 }
 
-/** 真删除老格式 ttml/<歌曲id>.ttml（没有 ttmlId 的历史数据） */
-async function destroyLegacy(songId) {
-  clearListAllCache()
-  const { head, del } = require('@vercel/blob')
-  if (!isValidId(songId)) return { songId, deleted: false }
+/**
+ * 如果没有别的歌曲 id 再绑这份内容，就把内容删掉。
+ * 索引就是权威记录，不再需要「等几秒再 list 一次」那种最终一致的兜底。
+ */
+async function gcContent(ttmlId) {
+  if (!isValidTtmlId(ttmlId)) return false
+  let removed = false
+  await mutateIndex((draft) => {
+    const entry = draft.contents[ttmlId]
+    if (entry && entry.ids.length) return { abort: { reason: 'in-use' } }
+    if (entry) delete draft.contents[ttmlId]
+    removed = true
+    return null
+  })
+  if (!removed) return false
   try {
-    const meta = await head(legacyKey(songId))
-    if (meta && meta.url) {
-      await del(meta.url)
-      return { songId, deleted: true }
-    }
+    const { del } = require('@vercel/blob')
+    await del(contentKey(ttmlId))
   } catch {
-    /* 不存在 */
+    return false
   }
-  return { songId, deleted: false }
+  contentCache.delete(ttmlId)
+  return true
+}
+
+/** 列某个歌曲 id 的绑定（新模型里最多一条，保留这个接口是为了兼容老调用方） */
+async function listBindings(songId) {
+  const id = String(songId)
+  const index = await readIndex()
+  const hit = contentOfSong(index.data, id)
+  if (!hit) return []
+  return [
+    {
+      pathname: bindKey(id, hit.ttmlId),
+      url: hit.entry.url || null,
+      ttmlId: hit.ttmlId,
+    },
+  ]
+}
+
+/** 某个内容 id 还被哪些歌曲 id 绑着 */
+async function bindingsOfTtml(ttmlId) {
+  const index = await readIndex()
+  const entry = index.data.contents[String(ttmlId)]
+  return entry ? entry.ids.slice() : []
 }
 
 /**
  * 列出所有内容与绑定（管理页用）。
- *
- * list() 是最终一致的：刚删掉的东西可能还会列出来一会儿。
- * 管理页要真实反映现状，所以每条再用 head() 确认一次 ——
- * 宁可多发几个请求，也不能让已经删掉的东西一直挂在界面上。
+ * 现在这份数据直接来自索引，不再 list、也不再逐条 head —— 刷新一次 0～1 次操作。
+ * fresh=true 时绕过 5 分钟缓存，页面点刷新就能看到最新结果。
  */
-// listAll 结果缓存。
-//
-// Vercel Blob 的 Advanced Operations 在 Hobby 计划每月只有 2K，
-// 超了会把整个 store 封锁（403 Your store is blocked）。
-// 管理页每次刷新都要 listAll，所以这里缓存 60 秒；
-// 任何写入/删除都会清掉缓存，页面不会看到过期数据。
-let listAllCache = null // { at: number, data: any }
-const LIST_ALL_TTL_MS = 5 * 60 * 1000
+async function listAll(options) {
+  const index = await readIndex({ fresh: !!(options && options.fresh) })
+  const doc = index.data
 
-// 单个歌曲 id 的读取结果缓存（键是歌曲 id）
-const loadCache = new Map()
-const LOAD_TTL_MS = 5 * 60 * 1000
-
-/** 清空读取缓存（任何写入、删除后调用） */
-function clearListAllCache() {
-  listAllCache = null
-  loadCache.clear()
-}
-
-async function listAll() {
-  if (listAllCache && Date.now() - listAllCache.at < LIST_ALL_TTL_MS) {
-    return listAllCache.data
-  }
-  const { list, head } = require('@vercel/blob')
-
-  // 这个路径到底还在不在（list 有删除延迟，只信 head）
-  const exists = async (pathname) => {
-    try {
-      await head(pathname)
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  // 一次 list 拿全（ttml/ 下面只有三种路径：c/<ttmlId>.ttml、b/<id>--<ttmlId>.json、<id>.ttml）
-  // 原来分三次 list 各取一种，每次都是一次往返，在跨区网络下非常贵。
-  const raw = []
-  let cursor
-  do {
-    const page = await list({ prefix: PREFIX, cursor, limit: 500 })
-    for (const b of page.blobs || []) raw.push(b)
-    cursor = page.cursor
-  } while (cursor)
-
-  const contents = []
-  const binds = []
-  const legacy = []
-  for (const b of raw) {
-    let m
-    if ((m = /^ttml\/c\/([0-9a-f]{16})\.ttml$/.exec(b.pathname))) {
-      contents.push({
-        ttmlId: m[1],
-        size: b.size,
-        uploadedAt: b.uploadedAt,
-        url: b.url,
-      })
-    } else if (
-      (m = /^ttml\/b\/(\d+)--([0-9a-f]{16})\.json$/.exec(b.pathname))
-    ) {
-      binds.push({ songId: m[1], ttmlId: m[2] })
-    } else if ((m = /^ttml\/(\d+)\.ttml$/.exec(b.pathname))) {
-      legacy.push({
-        songId: m[1],
-        pathname: b.pathname,
-        url: b.url,
-        size: b.size,
-        uploadedAt: b.uploadedAt,
-      })
-    }
-  }
-
-  const byId = new Map()
-  for (const c of contents) byId.set(c.ttmlId, { ...c, ids: [], orphan: false })
-  // list 理论上不会重复，但万一重复了别让同一个 id 出现两次
-  const seenBind = new Set()
-  for (const b of binds) {
-    const bindKey_ = b.songId + '--' + b.ttmlId
-    if (seenBind.has(bindKey_)) continue
-    seenBind.add(bindKey_)
-    if (!byId.has(b.ttmlId)) {
-      // 绑定还在、内容没了：历史遗留，标出来好清理
-      byId.set(b.ttmlId, {
-        ttmlId: b.ttmlId,
-        size: null,
-        uploadedAt: null,
-        url: null,
-        ids: [],
-        orphan: true,
-      })
-    }
-    byId.get(b.ttmlId).ids.push(b.songId)
-  }
-
-  // 只复核「内容」还在不在，不再逐个 head 绑定。
-  //
-  // 历史教训：之前为了消灭「删掉了、刷新又出现」的幽灵条目，
-  // 这里对每份内容的每个绑定也做了 head —— 一屏 15 份内容 + 40 个绑定
-  // 就是 55 次 Advanced Operations，Hobby 计划每月只有 2K，
-  // 直接把配额烧穿、store 被 Vercel 封锁（403 Your store is blocked）。
-  //
-  // 现在只查内容（15 次左右），剩下的延迟由两处兜住：
-  //   1. listAll 结果缓存 60 秒，刷新页面不再重复打 Blob；
-  //   2. 删除时立即清缓存，管理页自己的乐观移除也照旧。
-  const entries = [...byId.values()]
-  const alive = await Promise.all(
-    entries.map(async (it) => {
-      const contentOk = it.orphan ? false : await exists(contentKey(it.ttmlId))
-      return { it, contentOk, ids: it.ids }
-    }),
-  )
-
-  const items = entries
-    .map((it, i) => ({ ...it, ...alive[i] }))
-    // 内容已经不在的一律不显示 —— 删除后 list 会有延迟，
-    // 只看 list 就会出现「删掉了、刷新又出现」的幽灵条目。
-    .filter((x) => x.contentOk)
-    .map((x) => ({
-      ttmlId: x.it.ttmlId,
-      size: x.it.size,
-      uploadedAt: x.it.uploadedAt,
-      url: x.it.url,
-      ids: x.ids.slice().sort(),
-    }))
+  const items = Object.entries(doc.contents).map(([ttmlId, entry]) => ({
+    ttmlId,
+    ids: entry.ids.slice().sort(),
+    size: entry.size,
+    uploadedAt: entry.uploadedAt,
+    url: entry.url,
+    // 内容地址都不知道（常见于「绑定还在、内容没了」的历史遗留）
+    orphan: !entry.url,
+  }))
   items.sort((a, b) =>
     String(b.uploadedAt || '').localeCompare(String(a.uploadedAt || '')),
   )
 
-  // 老格式也复核一遍
-  const legacyAlive = await Promise.all(legacy.map((l) => exists(l.pathname)))
-  const liveLegacy = legacy.filter((_, i) => legacyAlive[i])
+  const legacy = Object.values(doc.legacy)
+    .map((l) => ({ ...l }))
+    .sort((a, b) =>
+      String(b.uploadedAt || '').localeCompare(String(a.uploadedAt || '')),
+    )
 
-  const result = {
+  return {
     items,
-    legacy: liveLegacy,
+    legacy,
     total: items.length,
     bindingCount: items.reduce((n, it) => n + it.ids.length, 0),
-    contentCount: items.length,
+    contentCount: items.filter((it) => !it.orphan).length,
+    updatedAt: doc.updatedAt,
   }
-  listAllCache = { at: Date.now(), data: result }
-  return result
 }
 
 /**
  * 真删除一份 TTML：
  *   1. 删掉所有指向它的绑定（歌曲 id 自动解绑）
  *   2. 删掉内容本体（Blob 上不留）
- * 按路径精确删，不依赖 list 的完整性做判断。
+ * 全程按路径删，索引里就有全部路径，不需要 list。
  */
 async function destroyTtml(ttmlId) {
-  clearListAllCache()
-  const { del, head, list } = require('@vercel/blob')
   if (!isValidTtmlId(ttmlId)) {
     return { ttmlId, unbound: [], contentDeleted: false, error: 'ttmlId 非法' }
   }
 
-  const unbound = []
-  let cursor
-  do {
-    const page = await list({ prefix: BIND_PREFIX, cursor, limit: 500 })
-    for (const b of page.blobs || []) {
-      if (!b.pathname.endsWith('--' + ttmlId + '.json')) continue
-      const m = /^ttml\/b\/(\d+)--/.exec(b.pathname)
-      try {
-        await del(b.url)
-        if (m) unbound.push(m[1])
-      } catch {
-        /* 单条删不掉不影响其它 */
-      }
-    }
-    cursor = page.cursor
-  } while (cursor)
-
-  let contentDeleted = false
-  try {
-    const meta = await head(contentKey(ttmlId))
-    if (meta && meta.url) {
-      await del(meta.url)
-      contentDeleted = true
-    }
-  } catch {
-    contentDeleted = false
+  const snapshot = await readIndex()
+  const known = snapshot.data.contents[ttmlId] || null
+  const ids = known ? known.ids.slice() : []
+  if (known) {
+    await mutateIndex((draft) => {
+      delete draft.contents[ttmlId]
+      return null
+    })
   }
 
-  return { ttmlId, unbound, contentDeleted }
+  const paths = [contentKey(ttmlId), ...ids.map((id) => bindKey(id, ttmlId))]
+  let deleted = false
+  let existed = false
+  try {
+    const { head, del } = require('@vercel/blob')
+    try {
+      await head(contentKey(ttmlId))
+      existed = true
+    } catch {
+      existed = false
+    }
+    await del(paths)
+    deleted = existed
+  } catch {
+    deleted = false
+  }
+
+  contentCache.delete(ttmlId)
+  return { ttmlId, unbound: ids, contentDeleted: deleted }
+}
+
+/** 真删除老格式 ttml/<歌曲id>.ttml */
+async function destroyLegacy(songId) {
+  if (!isValidId(songId)) return { songId, deleted: false }
+  const id = String(songId)
+  const index = await readIndex()
+  const known = index.data.legacy[id] || null
+
+  let deleted = false
+  try {
+    const { head, del } = require('@vercel/blob')
+    const target = known && known.url ? known.url : legacyKey(id)
+    try {
+      await head(target)
+      deleted = true
+    } catch {
+      deleted = false
+    }
+    if (deleted) await del(target)
+  } catch {
+    deleted = false
+  }
+
+  if (known) {
+    await mutateIndex((draft) => {
+      delete draft.legacy[id]
+      return null
+    })
+  }
+  legacyCache.delete(id)
+  return { songId: id, deleted }
 }
 
 /**
  * 对外展示的下载地址：走本站域名，不把 Blob 的随机子域暴露出去。
  * 域名可用 PUBLIC_BASE_URL 覆盖，默认就是站点本身。
- * 仍然按歌曲 id 下载（对外接口一律用歌曲 id）。
  */
 function downloadUrl(id) {
   const base = String(
@@ -612,6 +861,7 @@ module.exports = {
   PREFIX,
   CONTENT_PREFIX,
   BIND_PREFIX,
+  INDEX_KEY,
   isValidId,
   isValidTtmlId,
   ttmlIdOf,
@@ -631,4 +881,5 @@ module.exports = {
   destroyTtml,
   destroyLegacy,
   downloadUrl,
+  clearCaches,
 }

@@ -323,7 +323,7 @@
                         btn.disabled = false;
                         if (needVerify(r)) return;
                         if (r.data && r.data.code === 200) {
-                            // 立刻从界面移除：list() 有延迟，等它会看起来像没删掉
+                            // 立刻从界面移除：别等下一次刷新，否则看起来像没删掉
                             deleted[ttmlId] = true;
                             var item = btn.closest ? btn.closest('.item') : null;
                             if (item) item.remove();

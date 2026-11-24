@@ -96,7 +96,7 @@ async function readTtml(query) {
   }
 
   // 同一份 TTML 还绑着哪些别的歌曲 id。
-  // 把自己也并进去再排除掉，这样即使 list 有延迟、暂时没列出自己，结果也是准的。
+  // 把自己也并进去再排除掉：索引读的是缓存，偶尔慢半拍，这样结果总是准的。
   let siblings = []
   try {
     siblings = await ttmlStore.bindingsOfTtml(hit.ttmlId)
