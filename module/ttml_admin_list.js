@@ -11,7 +11,7 @@ module.exports = async () => {
       status: 501,
       body: {
         code: 501,
-        msg: '未配置 Vercel Blob（缺少 BLOB_READ_WRITE_TOKEN）',
+        msg: '未配置 KV（缺少 KV_REST_API_URL / KV_REST_API_TOKEN）',
       },
     }
   }

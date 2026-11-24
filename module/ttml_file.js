@@ -1,10 +1,11 @@
 // /ttml/file?id=186016 —— 按歌曲 id 下载 TTML
 //
 // 存在的意义：给出去的下载地址是本站域名（……/ttml/file?id=xxx），
-// 而不是 Blob 的随机子域（hbw16hh5qr9i4tgm.public.blob.vercel-storage.com）。
-// 这里负责 302 到真正的 Blob。
+// 而不是存储侧的地址。歌词正文现在存在 KV 里，所以这里直接把内容发出去，
+// 顺带把 Content-Type 设成 application/ttml+xml（浏览器没有渲染器，会直接存盘）。
 //
-// Blob 那边 Content-Type 是 application/ttml+xml，浏览器没有渲染器，会直接存盘。
+// 以前正文在 Vercel Blob 上时这里是 302 到 Blob；Blob 被额度停用后
+// 换成了 KV，下载地址对外保持不变。
 const ttmlStore = require('../plugins/ttmlStore.js')
 
 module.exports = async (query) => {
@@ -21,21 +22,21 @@ module.exports = async (query) => {
       status: 501,
       body: {
         code: 501,
-        msg: '未配置 Vercel Blob（缺少 BLOB_READ_WRITE_TOKEN）',
+        msg: '未配置 KV（缺少 KV_REST_API_URL / KV_REST_API_TOKEN）',
       },
     }
   }
 
-  let meta
+  let hit
   try {
-    meta = await ttmlStore.stat(id)
+    hit = await ttmlStore.load(id)
   } catch (e) {
     return {
       status: 500,
       body: { code: 500, msg: '读取失败：' + (e.message || e) },
     }
   }
-  if (!meta) {
+  if (!hit) {
     return {
       status: 404,
       body: {
@@ -46,5 +47,12 @@ module.exports = async (query) => {
     }
   }
 
-  return { status: 302, body: '', redirectUrl: meta.url }
+  return {
+    status: 200,
+    headers: {
+      'content-type': 'application/ttml+xml; charset=utf-8',
+      'content-disposition': `attachment; filename="${id}.ttml"`,
+    },
+    body: hit.ttml,
+  }
 }

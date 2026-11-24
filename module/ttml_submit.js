@@ -73,7 +73,7 @@ module.exports = async (query, request) => {
       status: 501,
       body: {
         code: 501,
-        msg: '未配置 Vercel Blob（缺少 BLOB_READ_WRITE_TOKEN）',
+        msg: '未配置 KV（缺少 KV_REST_API_URL / KV_REST_API_TOKEN）',
       },
     }
   }
@@ -244,7 +244,7 @@ module.exports = async (query, request) => {
     }
   }
 
-  // 5) 入 Blob：内容只存一份（按内容 id 命名），再给每个歌曲 id 建绑定
+  // 5) 入库：内容只存一份（按内容 id 命名），再给每个歌曲 id 建绑定
   let put
   try {
     put = await store.save(ids, ttml)

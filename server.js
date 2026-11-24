@@ -392,6 +392,8 @@ async function constructServer(moduleDefs) {
           return
         }
 
+        // 模块可以自带响应头（比如 /ttml/file 要输出 application/ttml+xml）
+        if (moduleResponse.headers) res.set(moduleResponse.headers)
         res.status(moduleResponse.status).send(moduleResponse.body)
       } catch (/** @type {*} */ moduleResponse) {
         logger.error(`${decode(req.originalUrl)}`, {
@@ -412,6 +414,7 @@ async function constructServer(moduleDefs) {
           res.append('Set-Cookie', moduleResponse.cookie)
         }
 
+        if (moduleResponse.headers) res.set(moduleResponse.headers)
         res.status(moduleResponse.status).send(moduleResponse.body)
       }
     })

@@ -1,7 +1,11 @@
-// ttmlStore 的离线单测：把 @vercel/blob 换成内存里的假实现，
-// 重点验证「读歌词不再 list」这件事 —— 那是 Hobby 额度被烧穿的根因。
+// ttmlStore 的离线单测：用一个假 Upstash REST 服务替代真 KV。
 //
-// 这个文件不联网、不需要 BLOB_READ_WRITE_TOKEN，`pnpm test` 时会一起跑。
+// 重点验证三件事：
+//   1. 读一份歌词只用点查（GET），不再有 list 这种「高级操作」；
+//   2. 保存 / 冲突 / 并发绑定 / 解绑 / 真删除的行为和以前一致；
+//   3. Blob 时代的老数据能通过 migrateFromBlob 搬进来。
+//
+// 这个文件不联网、不需要任何 token，`pnpm test` 时会一起跑。
 const assert = require('assert')
 const http = require('http')
 const Module = require('module')
@@ -11,167 +15,153 @@ const TTML_A =
   '<?xml version="1.0"?><tt xmlns="http://www.w3.org/ns/ttml"><body><div>' +
   '<p begin="00:00:01.000" end="00:00:03.000">a</p></div></body></tt>'
 const TTML_B = TTML_A.replace('>a<', '>b<')
+const TTML_L = TTML_A.replace('>a<', '>legacy<')
 
-function makeFakeBlob() {
-  const stats = { list: 0, get: 0, put: 0, head: 0, del: 0 }
-  const blobs = new Map()
-  let seq = 0
-  let port = 0
+/** 假 Upstash：POST / 跑一条命令，POST /pipeline 跑一批 */
+function makeFakeKv() {
+  const strings = new Map()
+  const sets = new Map()
+  const stats = { commands: 0, requests: 0 }
 
-  const urlOf = (pathname) => `http://127.0.0.1:${port}/blob/${pathname}`
-  const toPathname = (input) => {
-    const s = String(input)
-    const m = /^\/blob\/(.+)$/.exec(s.replace(/^https?:\/\/[^/]+/, ''))
-    return m ? m[1] : s
-  }
-  const etagOf = (body) => {
-    seq += 1
-    const hash = require('crypto').createHash('sha1').update(body).digest('hex')
-    return `"${hash}-${seq}"`
-  }
-  const setRaw = (pathname, body, contentType, uploadedAt) => {
-    blobs.set(pathname, {
-      body,
-      contentType: contentType || 'text/plain',
-      etag: etagOf(body),
-      uploadedAt: uploadedAt || new Date().toISOString(),
-    })
+  const run = (command) => {
+    stats.commands += 1
+    const [name, ...args] = command.map((x) => String(x))
+    const op = name.toUpperCase()
+    if (op === 'GET') return strings.has(args[0]) ? strings.get(args[0]) : null
+    if (op === 'SET') {
+      strings.set(args[0], args[1])
+      return 'OK'
+    }
+    if (op === 'DEL') {
+      let n = 0
+      for (const key of args) {
+        if (strings.delete(key)) n += 1
+        if (sets.delete(key)) n += 1
+      }
+      return n
+    }
+    if (op === 'EXISTS') {
+      return args.filter((k) => strings.has(k) || sets.has(k)).length
+    }
+    if (op === 'SADD') {
+      const set = sets.get(args[0]) || new Set()
+      let added = 0
+      for (const member of args.slice(1)) {
+        if (!set.has(member)) {
+          set.add(member)
+          added += 1
+        }
+      }
+      sets.set(args[0], set)
+      return added
+    }
+    if (op === 'SREM') {
+      const set = sets.get(args[0])
+      if (!set) return 0
+      let removed = 0
+      for (const member of args.slice(1)) {
+        if (set.delete(member)) removed += 1
+      }
+      return removed
+    }
+    if (op === 'SMEMBERS') return [...(sets.get(args[0]) || new Set())]
+    if (op === 'SCARD') return (sets.get(args[0]) || new Set()).size
+    throw new Error('假 KV 不认识这个命令：' + name)
   }
 
   const server = http.createServer((req, res) => {
-    const target = decodeURIComponent(String(req.url).split('?')[0])
-    const m = /^\/blob\/(.+)$/.exec(target)
-    const rec = m && blobs.get(m[1])
-    if (!rec) {
-      res.statusCode = 404
-      res.end('missing')
-      return
-    }
-    res.setHeader('content-type', rec.contentType)
-    res.end(rec.body)
+    const chunks = []
+    req.on('data', (c) => chunks.push(c))
+    req.on('end', () => {
+      stats.requests += 1
+      let body
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '[]')
+      } catch {
+        res.statusCode = 400
+        return res.end(JSON.stringify({ error: 'bad json' }))
+      }
+      try {
+        const result = String(req.url).startsWith('/pipeline')
+          ? body.map((cmd) => ({ result: run(cmd) }))
+          : { result: run(body) }
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify(result))
+      } catch (e) {
+        res.statusCode = 500
+        res.end(JSON.stringify({ error: e.message }))
+      }
+    })
   })
 
-  const notFound = (name) => {
-    const e = new Error('The requested blob does not exist: ' + name)
-    e.name = 'BlobNotFoundError'
-    return e
-  }
-
-  const api = {
-    async put(pathname, body, options = {}) {
-      stats.put += 1
-      const prev = blobs.get(pathname)
-      if (prev && !options.allowOverwrite && !options.ifMatch) {
-        const e = new Error('blob already exists')
-        e.name = 'BlobError'
-        throw e
-      }
-      if (options.ifMatch && (!prev || prev.etag !== options.ifMatch)) {
-        const e = new Error('Precondition failed')
-        e.name = 'BlobPreconditionFailedError'
-        throw e
-      }
-      const text = typeof body === 'string' ? body : String(body)
-      setRaw(pathname, text, options.contentType, new Date().toISOString())
-      const rec = blobs.get(pathname)
-      return {
-        url: urlOf(pathname),
-        downloadUrl: urlOf(pathname),
-        pathname,
-        contentType: rec.contentType,
-        contentDisposition: '',
-        cacheControl: '',
-        etag: rec.etag,
-      }
-    },
-    async get(pathname, options = {}) {
-      stats.get += 1
-      const rec = blobs.get(toPathname(pathname))
-      if (!rec) return null
-      if (options.ifNoneMatch && options.ifNoneMatch === rec.etag) {
-        return { statusCode: 304, stream: null, blob: { etag: rec.etag } }
-      }
-      return {
-        statusCode: 200,
-        stream: new Response(rec.body).body,
-        blob: {
-          url: urlOf(toPathname(pathname)),
-          etag: rec.etag,
-          contentType: rec.contentType,
-          size: Buffer.byteLength(rec.body),
-        },
-      }
-    },
-    async head(pathname) {
-      stats.head += 1
-      const rec = blobs.get(toPathname(pathname))
-      if (!rec) throw notFound(pathname)
-      return {
-        url: urlOf(toPathname(pathname)),
-        etag: rec.etag,
-        size: Buffer.byteLength(rec.body),
-        uploadedAt: rec.uploadedAt,
-        contentType: rec.contentType,
-      }
-    },
-    async del(input) {
-      stats.del += 1
-      const list = Array.isArray(input) ? input : [input]
-      for (const one of list) blobs.delete(toPathname(one))
-    },
-    async list(options = {}) {
-      stats.list += 1
-      const prefix = options.prefix || ''
-      const keys = [...blobs.keys()].filter((k) => k.startsWith(prefix)).sort()
-      const limit = options.limit || 100
-      const start = options.cursor
-        ? Number(Buffer.from(options.cursor, 'base64').toString())
-        : 0
-      const page = keys.slice(start, start + limit)
-      const hasMore = start + limit < keys.length
-      return {
-        blobs: page.map((k) => {
-          const rec = blobs.get(k)
-          return {
-            pathname: k,
-            url: urlOf(k),
-            size: Buffer.byteLength(rec.body),
-            uploadedAt: rec.uploadedAt,
-            etag: rec.etag,
-            contentType: rec.contentType,
-          }
-        }),
-        cursor: hasMore
-          ? Buffer.from(String(start + limit)).toString('base64')
-          : null,
-        hasMore,
-      }
-    },
-  }
-
-  return { api, stats, blobs, server, setPort: (p) => (port = p), urlOf }
+  return { server, strings, sets, stats }
 }
 
-describe('ttmlStore（假 Blob）', () => {
-  let fake
+/** 假的 @vercel/blob：只实现迁移用到的 list / get */
+function makeFakeBlob() {
+  const files = new Map() // pathname -> { text, uploadedAt }
+  return {
+    files,
+    api: {
+      async list(options = {}) {
+        const prefix = options.prefix || ''
+        return {
+          blobs: [...files.keys()]
+            .filter((k) => k.startsWith(prefix))
+            .map((k) => ({
+              pathname: k,
+              url: 'https://blob.invalid/' + k,
+              size: Buffer.byteLength(files.get(k).text),
+              uploadedAt: files.get(k).uploadedAt,
+            })),
+          cursor: null,
+          hasMore: false,
+        }
+      },
+      async get(pathname) {
+        const rec = files.get(
+          String(pathname).replace(/^https?:\/\/[^/]+\//, ''),
+        )
+        if (!rec) return null
+        return {
+          statusCode: 200,
+          stream: new Response(rec.text).body,
+          blob: { url: 'https://blob.invalid/' + pathname },
+        }
+      },
+    },
+  }
+}
+
+describe('ttmlStore（假 KV）', () => {
+  let kv
+  let fakeBlob
   let store
   let storePath
   let originalLoad
-  let originalToken
+  let originalEnv
 
   before(async () => {
-    fake = makeFakeBlob()
-    await new Promise((resolve) => fake.server.listen(0, '127.0.0.1', resolve))
-    fake.setPort(fake.server.address().port)
+    kv = makeFakeKv()
+    await new Promise((r) => kv.server.listen(0, '127.0.0.1', r))
+    const port = kv.server.address().port
 
-    originalToken = process.env.BLOB_READ_WRITE_TOKEN
-    process.env.BLOB_READ_WRITE_TOKEN = 'test-token'
+    originalEnv = {
+      url: process.env.KV_REST_API_URL,
+      token: process.env.KV_REST_API_TOKEN,
+      blob: process.env.BLOB_READ_WRITE_TOKEN,
+    }
+    process.env.KV_REST_API_URL = `http://127.0.0.1:${port}`
+    process.env.KV_REST_API_TOKEN = 'fake-token'
+    process.env.BLOB_READ_WRITE_TOKEN = 'fake-blob-token'
+
+    fakeBlob = makeFakeBlob()
     storePath = require.resolve('../plugins/ttmlStore.js')
     delete require.cache[storePath]
 
     originalLoad = Module._load
     Module._load = function (request, parent, isMain) {
-      if (request === '@vercel/blob') return fake.api
+      if (request === '@vercel/blob') return fakeBlob.api
       return originalLoad.call(this, request, parent, isMain)
     }
     store = require(storePath)
@@ -180,155 +170,147 @@ describe('ttmlStore（假 Blob）', () => {
   after((done) => {
     Module._load = originalLoad
     delete require.cache[storePath]
-    if (originalToken === undefined) delete process.env.BLOB_READ_WRITE_TOKEN
-    else process.env.BLOB_READ_WRITE_TOKEN = originalToken
-    fake.server.close(done)
+    for (const [key, value] of [
+      ['KV_REST_API_URL', originalEnv.url],
+      ['KV_REST_API_TOKEN', originalEnv.token],
+      ['BLOB_READ_WRITE_TOKEN', originalEnv.blob],
+    ]) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    kv.server.close(done)
   })
 
-  it('首次读老数据时只 list 一次，之后不再 list', async () => {
+  it('保存后可读，且读只用点查（没有 list 这种操作）', async () => {
+    store.clearCaches()
     const aId = store.ttmlIdOf(TTML_A)
-    fake.blobs.set(store.contentKey(aId), {
-      body: TTML_A,
-      contentType: 'application/ttml+xml',
-      etag: '"a"',
-      uploadedAt: '2026-10-01T00:00:00.000Z',
-    })
-    fake.blobs.set(store.bindKey('186016', aId), {
-      body: JSON.stringify({ songId: '186016', ttmlId: aId }),
-      contentType: 'application/json',
-      etag: '"b"',
-      uploadedAt: '2026-10-01T00:00:00.000Z',
-    })
-    fake.blobs.set('ttml/999.ttml', {
-      body: TTML_B,
-      contentType: 'application/ttml+xml',
-      etag: '"c"',
-      uploadedAt: '2026-09-01T00:00:00.000Z',
-    })
-
-    const hit = await store.load('186016')
-    assert.strictEqual(hit.ttmlId, aId)
-    assert.strictEqual(fake.stats.list, 1, '建索引只该 list 一次')
-    assert.ok(fake.blobs.has(store.INDEX_KEY), '索引应该已经写进 store')
-
-    const before = { ...fake.stats }
-    const again = await store.load('186016')
-    assert.strictEqual(again.ttmlId, aId)
-    assert.strictEqual(fake.stats.list, before.list, '第二次读不该再 list')
-
-    const all = await store.listAll()
-    assert.strictEqual(all.items.length, 1)
-    assert.strictEqual(all.bindingCount, 1)
-    assert.strictEqual(all.legacy.length, 1)
-    assert.strictEqual(fake.stats.list, before.list, 'listAll 不该再 list')
-  })
-
-  it('保存 / 冲突 / 并发写 / 解绑 / 真删除', async () => {
-    const aId = store.ttmlIdOf(TTML_A)
-    const bId = store.ttmlIdOf(TTML_B)
 
     const saved = await store.save(['186016', '200000'], TTML_A)
     assert.strictEqual(saved.blocked, false)
-    assert.deepStrictEqual(saved.already, ['186016'])
-    assert.deepStrictEqual(saved.bound, ['200000'])
-    assert.ok(fake.blobs.has(store.bindKey('200000', aId)), '绑定存档要写')
+    assert.deepStrictEqual(saved.bound, ['186016', '200000'])
 
-    const conflict = await store.save(['186016'], TTML_B)
-    assert.strictEqual(conflict.blocked, true)
-    assert.strictEqual(conflict.conflicts[0].boundTo, aId)
+    const commandsBefore = kv.stats.commands
+    const hit = await store.load('186016')
+    assert.strictEqual(hit.ttmlId, aId)
+    assert.strictEqual(hit.ttml, TTML_A)
+    // 冷缓存：GET song + (GET content + GET meta) = 3 条命令，一次往返
     assert.ok(
-      !fake.blobs.has(store.bindKey('186016', bId)),
-      '冲突时不该写任何绑定',
+      kv.stats.commands - commandsBefore <= 3,
+      '读一份歌词不该超过 3 条命令：' + (kv.stats.commands - commandsBefore),
     )
 
-    // 模拟另一个实例抢先改索引：本实例缓存是旧的，靠 ifMatch 重试合并
-    const raw = await fake.api.get(store.INDEX_KEY)
-    const doc = JSON.parse(await new Response(raw.stream).text())
-    doc.contents[bId] = {
-      ids: ['300000'],
-      size: 10,
-      uploadedAt: '2026-11-01T00:00:00.000Z',
-      url: null,
-      pathname: store.contentKey(bId),
-    }
-    await fake.api.put(store.INDEX_KEY, JSON.stringify(doc), {
-      access: 'public',
-      allowOverwrite: true,
-      ifMatch: raw.blob.etag,
-    })
+    const commandsWarm = kv.stats.commands
+    await store.load('186016')
+    assert.strictEqual(
+      kv.stats.commands,
+      commandsWarm,
+      '热缓存下读同一份歌词应该是 0 条命令',
+    )
 
-    const merged = await store.save(['400000'], TTML_B)
-    assert.strictEqual(merged.blocked, false)
-    const idsB = await store.bindingsOfTtml(bId)
-    assert.ok(idsB.includes('300000'), '别把并发写进来的 id 覆盖掉')
-    assert.ok(idsB.includes('400000'))
+    assert.deepStrictEqual(await store.bindingsOfTtml(aId), [
+      '186016',
+      '200000',
+    ])
+    const all = await store.listAll()
+    assert.strictEqual(all.items.length, 1)
+    assert.strictEqual(all.bindingCount, 2)
+  })
 
-    const unbound = await store.unbind('200000', aId)
-    assert.strictEqual(unbound.unbound, true)
-    assert.strictEqual(unbound.contentDeleted, false)
-    assert.ok(!fake.blobs.has(store.bindKey('200000', aId)))
+  it('查不到的歌曲不会写出任何东西，也不会反复查 KV', async () => {
+    store.clearCaches()
+    const commandsBefore = kv.stats.commands
+    assert.strictEqual(await store.load('123456789'), null)
+    const first = kv.stats.commands - commandsBefore
+    assert.ok(first <= 4, '查不到最多 4 条命令（song + legacy 两对）：' + first)
+
+    const commandsAfter = kv.stats.commands
+    assert.strictEqual(await store.load('123456789'), null)
+    assert.strictEqual(
+      kv.stats.commands,
+      commandsAfter,
+      '「没有」也要缓存，别每个请求都打 KV',
+    )
+  })
+
+  it('冲突检测：一个歌曲 id 不能同时绑两份', async () => {
+    const bId = store.ttmlIdOf(TTML_B)
+    const conflict = await store.save(['186016'], TTML_B)
+    assert.strictEqual(conflict.blocked, true)
+    assert.strictEqual(conflict.conflicts[0].boundTo, store.ttmlIdOf(TTML_A))
+    assert.strictEqual(
+      kv.strings.get('ttml:song:186016'),
+      store.ttmlIdOf(TTML_A),
+    )
+
+    // 同一份内容再提交：already，不算冲突
+    const again = await store.save(['186016'], TTML_A)
+    assert.strictEqual(again.blocked, false)
+    assert.deepStrictEqual(again.already, ['186016'])
+    assert.deepStrictEqual(again.bound, [])
+    assert.ok(!(kv.sets.get('ttml:ids') || new Set()).has(bId))
+  })
+
+  it('解绑 / 最后一条解绑回收正文 / 真删除', async () => {
+    const aId = store.ttmlIdOf(TTML_A)
+
+    const one = await store.unbind('200000', aId)
+    assert.strictEqual(one.unbound, true)
+    assert.strictEqual(one.contentDeleted, false)
+    assert.deepStrictEqual(await store.bindingsOfTtml(aId), ['186016'])
 
     const last = await store.unbind('186016', aId)
     assert.strictEqual(last.contentDeleted, true)
-    assert.ok(!fake.blobs.has(store.contentKey(aId)))
+    assert.strictEqual(kv.strings.has(`ttml:content:${aId}`), false)
 
+    // 真删除：绑了两个 id，删完两边都没了
+    const bId = store.ttmlIdOf(TTML_B)
+    await store.save(['300000', '400000'], TTML_B)
     const destroyed = await store.destroyTtml(bId)
-    assert.deepStrictEqual(destroyed.unbound.sort(), ['300000', '400000'])
-    assert.ok(!fake.blobs.has(store.contentKey(bId)))
-    assert.ok(!fake.blobs.has(store.bindKey('300000', bId)))
-
-    const empty = await store.listAll({ fresh: true })
-    assert.strictEqual(empty.items.length, 0)
+    assert.deepStrictEqual(destroyed.unbound, ['300000', '400000'])
+    assert.strictEqual(destroyed.contentDeleted, true)
+    assert.strictEqual(kv.strings.has('ttml:song:300000'), false)
+    assert.strictEqual((await store.listAll()).items.length, 0)
   })
 
-  it('查不到歌词时不额外打 Blob（不 head、不 list）', async () => {
+  it('老格式数据可读、可删', async () => {
+    kv.strings.set('ttml:legacy:999', TTML_L)
+    kv.sets.set('ttml:legacy:ids', new Set(['999']))
     store.clearCaches()
-    const before = { ...fake.stats }
-    const miss = await store.load('123456789')
-    assert.strictEqual(miss, null)
-    assert.strictEqual(fake.stats.list, before.list, '查不到也不该 list')
-    assert.strictEqual(fake.stats.head, before.head, '不该 head 探老格式')
-    assert.ok(
-      fake.stats.get - before.get <= 1,
-      '冷缓存下最多读一次索引：' + (fake.stats.get - before.get),
-    )
+
+    const hit = await store.load('999')
+    assert.ok(hit && hit.legacy)
+    assert.strictEqual(hit.ttmlId, store.ttmlIdOf(TTML_L))
+
+    const out = await store.destroyLegacy('999')
+    assert.strictEqual(out.deleted, true)
+    assert.strictEqual(kv.strings.has('ttml:legacy:999'), false)
   })
 
-  it('老格式还能读、能删', async () => {
-    const stat = await store.stat('999')
-    assert.strictEqual(stat.ttmlId, store.ttmlIdOf(TTML_B))
-    const deleted = await store.destroyLegacy('999')
-    assert.strictEqual(deleted.deleted, true)
-    assert.ok(!fake.blobs.has('ttml/999.ttml'))
-  })
-
-  it('索引坏掉时按「不存在」处理，从存档重建（不能当成空索引）', async () => {
+  it('能把 Blob 时代的数据迁移进来', async () => {
     const aId = store.ttmlIdOf(TTML_A)
-    await store.save(['600000'], TTML_A)
-    fake.blobs.set(store.INDEX_KEY, {
-      body: '{"contents": {broken',
-      contentType: 'application/json',
-      etag: '"broken"',
-      uploadedAt: new Date().toISOString(),
+    fakeBlob.files.set('ttml/c/' + aId + '.ttml', {
+      text: TTML_A,
+      uploadedAt: '2026-10-01T00:00:00.000Z',
     })
+    fakeBlob.files.set('ttml/b/186016--' + aId + '.json', {
+      text: '{}',
+      uploadedAt: '2026-10-01T00:00:00.000Z',
+    })
+    fakeBlob.files.set('ttml/888.ttml', {
+      text: TTML_L,
+      uploadedAt: '2026-09-01T00:00:00.000Z',
+    })
+
     store.clearCaches()
+    const moved = await store.migrateFromBlob()
+    assert.strictEqual(moved.contents, 1)
+    assert.strictEqual(moved.bindings, 1)
+    assert.strictEqual(moved.legacy, 1)
 
-    const hit = await store.load('600000')
-    assert.ok(hit, '索引坏了也要能读出来')
+    const hit = await store.load('186016')
     assert.strictEqual(hit.ttmlId, aId)
-    const again = await store.listAll({ fresh: true })
-    assert.strictEqual(again.items.length, 1, '重建后不该变成空索引')
-  })
-
-  it('索引被删掉后能靠绑定存档重建', async () => {
-    const aId = store.ttmlIdOf(TTML_A)
-    await store.save(['500000'], TTML_A)
-    fake.blobs.delete(store.INDEX_KEY)
-    store.clearCaches()
-
-    const hit = await store.load('500000')
-    assert.ok(hit, '索引丢了也要能读出来')
-    assert.strictEqual(hit.ttmlId, aId)
-    assert.ok(fake.blobs.has(store.INDEX_KEY), '重建后应该重新写回索引')
+    assert.strictEqual(hit.uploadedAt, '2026-10-01T00:00:00.000Z')
+    const legacy = await store.load('888')
+    assert.ok(legacy && legacy.legacy)
   })
 })

@@ -7,9 +7,9 @@ const ttmlStore = require('../plugins/ttmlStore.js')
  * TTML 歌词读取（本项目自定义扩展）。
  *
  *   GET /search?ttml=<网易云歌曲id>          返回 JSON（含 ttml 原文）
- *   GET /search?ttml=<网易云歌曲id>&raw=1    302 到 Blob 原文，拿到正确的 TTML MIME
+ *   GET /search?ttml=<网易云歌曲id>&raw=1    直接回 TTML 原文，MIME 是 application/ttml+xml
  *
- * 歌词由 /ttml/ 页面上传、经 AI 审核后入 Blob，见 plugins/ttmlStore.js。
+ * 歌词由 /ttml/ 页面上传、经脚本审核后入 KV，见 plugins/ttmlStore.js。
  * 注意：这是加在上游文件里的钩子，上游同步时保留这一段（同 server.js 里
  * /song/url/v1 那处自定义修复的处理方式）。
  */
@@ -30,7 +30,7 @@ async function readTtml(query) {
       status: 501,
       body: {
         code: 501,
-        msg: '未配置 Vercel Blob（缺少 BLOB_READ_WRITE_TOKEN）',
+        msg: '未配置 KV（缺少 KV_REST_API_URL / KV_REST_API_TOKEN）',
       },
     }
   }
@@ -55,10 +55,14 @@ async function readTtml(query) {
     }
   }
 
-  // raw 模式直接跳 Blob：那边 Content-Type 是 application/ttml+xml，
-  // 比在经过本接口时被强制成 application/json 更规范
+  // raw 模式直接输出 TTML 原文，Content-Type 用 application/ttml+xml，
+  // 比强制成 application/json 更规范
   if (query.raw === '1' || query.raw === 'true') {
-    return { status: 302, body: '', redirectUrl: hit.url }
+    return {
+      status: 200,
+      headers: { 'content-type': 'application/ttml+xml; charset=utf-8' },
+      body: hit.ttml,
+    }
   }
 
   // Apple Music 的形状：{ data: [{ id, type, attributes: { playParams, ttmlLocalizations } }] }

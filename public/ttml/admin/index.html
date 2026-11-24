@@ -96,7 +96,7 @@
     <main class="container">
         <header class="site-header">
             <h1>TTML 管理</h1>
-            <p class="sub">所有已上传的 TTML 与其绑定的歌曲 id；删除会真删 Blob 内容并自动解绑全部 id</p>
+            <p class="sub">所有已上传的 TTML 与其绑定的歌曲 id；删除会真删存储里的内容并自动解绑全部 id</p>
         </header>
 
         <section class="block">
@@ -131,7 +131,7 @@
             var $ = function (id) { return document.getElementById(id); };
             var info = $('info');
             var pending = null;   // 两步确认：记住要点哪个
-            // 已确认删掉的（Blob 的 list/head 删除后要几十秒才更新，
+            // 已确认删掉的（删完立刻从界面移除，
             // 这期间还会把它们列出来。本会话内先自己滤掉，避免看起来像没删掉）
             var deleted = Object.create(null);
 
@@ -229,7 +229,7 @@
                         if (pending !== key) {
                             pending = key;
                             del.textContent = '再点一次：真删除';
-                            say('确认删除 ttmlId=' + it.ttmlId + '？内容会从 Blob 真删掉，' +
+                            say('确认删除 ttmlId=' + it.ttmlId + '？内容会从存储真删掉，' +
                                 (it.count ? it.count + ' 个歌曲 id 会自动解绑。' : '当前没有绑定。'));
                             return;
                         }
@@ -296,7 +296,7 @@
                         if (pending !== key) {
                             pending = key;
                             del.textContent = '再点一次：真删除';
-                            say('确认删除老格式 ttml/' + it.songId + '.ttml？会从 Blob 真删掉。');
+                            say('确认删除老格式 ttml/' + it.songId + '.ttml？会从存储真删掉。');
                             return;
                         }
                         pending = null;
@@ -351,7 +351,7 @@
                         btn.disabled = false;
                         if (needVerify(r)) return;
                         if (r.data && r.data.code === 200) {
-                            // 立刻从界面移除：Blob 的 list/head 删除后有延迟
+                            // 立刻从界面移除：别等下一次刷新
                             deleted['legacy:' + songId] = true;
                             var item = btn.closest ? btn.closest('.item') : null;
                             if (item) item.remove();
@@ -376,7 +376,7 @@
                             say((r.data && r.data.msg) || ('HTTP ' + r.status), 'err');
                             return;
                         }
-                        // 过滤掉本会话里已经删掉的：Blob 的 list/head 删除后要过一会儿才更新
+                        // 过滤掉本会话里已经删掉的，别让刷新把刚删的又显示出来
                         var items = (r.data.items || []).filter(function (it) {
                             return !deleted[it.ttmlId];
                         });
