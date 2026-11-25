@@ -829,7 +829,8 @@
 
                     var blobs = r.data.blobs || [];
                     if (!blobs.length) {
-                        listInfo.textContent = '还没有上传过文件';
+                        listInfo.textContent = '还没有上传过文件' +
+                            '（Blob 里的老文件要用 /file/migrate 登记一次才会出现在这里）';
                         return;
                     }
                     listInfo.textContent = '共 ' + blobs.length + ' 个文件' +

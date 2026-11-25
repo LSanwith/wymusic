@@ -186,7 +186,9 @@
                 var box = $('list');
                 box.innerHTML = '';
                 if (!items.length) {
-                    box.innerHTML = '<div class="hint">还没有任何 TTML。</div>';
+                    box.innerHTML = '<div class="hint">还没有任何 TTML。' +
+                        '如果 Blob 里还存着 2026-12 之前上传的歌词，等 store 恢复后' +
+                        '访问 /ttml/migrate?password=… 就能一次性搬进 KV。</div>';
                     return;
                 }
                 items.forEach(function (it) {
