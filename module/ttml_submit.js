@@ -1,10 +1,9 @@
 // TTML 歌词提交 + 脚本审核 + 入库
 //
 //   POST /ttml/submit
-//   body 或 query：{ ttml, ids, pass }
+//   body 或 query：{ ttml, ids }
 //     ttml  必填，TTML 原文
 //     ids   必填，对应的网易云歌曲 id，可多个（数组或逗号分隔，最多 8 个）
-//     pass  人机验证通行证（见 plugins/filePass.js）
 //
 // 审核是纯脚本，不调用 AI（0 token），规则见 plugins/ttmlReview.js：
 //   结构那一套（行数、时间轴、完整性）+ 与官方歌词的字面重合率。

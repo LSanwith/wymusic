@@ -1,61 +1,21 @@
-// 人机验证（Cloudflare Turnstile）
+// 人机验证（Cloudflare Turnstile）—— 已停用
 //
-//   GET /file/verify              页面启动时问一句：开没开？站点公钥是啥？
-//   GET /file/verify?token=xxx    拿 Turnstile 的令牌去官方校验，通过则签发通行证
+//   GET /file/verify   页面启动时问一句「要不要弹验证框」
 //
-// 说明：Turnstile 与 Cloudflare 的 CDN/WAF 无关，域名不接入 CF 也能用，
-// 只要在 CF 面板建一个 widget，hostname 填本站域名即可。
-const { enabled, issue } = require('../plugins/filePass.js')
-
-const SITEVERIFY = 'https://challenges.cloudflare.com/turnstile/v0/siteverify'
-
-module.exports = async (query) => {
-  // 没配密钥就是不启用，页面照常工作（不把功能锁死）
-  if (!enabled()) {
-    return { status: 200, body: { code: 200, enabled: false } }
-  }
-
-  const token = String(query.token || '').trim()
-
-  // 不带 token：只回配置，页面据此决定要不要弹验证框
-  if (!token) {
-    return {
-      status: 200,
-      body: {
-        code: 200,
-        enabled: true,
-        siteKey: process.env.TURNSTILE_SITE_KEY || '',
-      },
-    }
-  }
-
-  try {
-    const res = await fetch(SITEVERIFY, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        secret: process.env.TURNSTILE_SECRET_KEY,
-        response: token,
-      }),
-    })
-    const data = await res.json()
-    if (!data.success) {
-      return {
-        status: 403,
-        body: {
-          code: 403,
-          msg: '人机验证未通过，请重试',
-          // error-codes 是 CF 的诊断码（如 timeout-or-duplicate），
-          // 便于排查，不含敏感信息
-          detail: (data['error-codes'] || []).join(','),
-        },
-      }
-    }
-    return { status: 200, body: { code: 200, pass: issue() } }
-  } catch (e) {
-    return {
-      status: 502,
-      body: { code: 502, msg: '校验服务暂时不可用：' + (e.message || e) },
-    }
+// 以前这里是 Turnstile：配了 TURNSTILE_SECRET_KEY 就要求上传/列表都带通行证。
+// 但 Turnstile 的前端组件在 challenges.cloudflare.com 上，国内网络经常连不上，
+// 组件加载失败就永远拿不到通行证 —— 表现就是文件页一进来就卡在验证框、
+// 上传完全用不了（TTML 那边 2026-11 也是同一个原因去掉的）。
+//
+// 现在固定回 enabled:false，页面据此直接进入正常界面。
+// 安全兜底仍然在：上传要带 FILE_UPLOAD_KEY 口令（若配置），
+// 且文件大小/后缀由上传接口的令牌约束。
+//
+// 这个接口保留是为了让老页面（缓存里的 JS）问配置时能拿到干净的 200，
+// 而不是一个 404。
+module.exports = async () => {
+  return {
+    status: 200,
+    body: { code: 200, enabled: false, reason: 'turnstile-disabled' },
   }
 }

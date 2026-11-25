@@ -1,6 +1,6 @@
 // 文件挂载代理 · 上传完成登记
 //
-//   GET/POST /file/register?pathname=tmp/待机时钟.sb3[&key=…][&pass=…]
+//   GET/POST /file/register?pathname=tmp/待机时钟.sb3[&key=…]
 //
 // 浏览器的 @vercel/blob/client 把文件直传到 Blob 之后调一下这里，
 // 服务端 head 一次拿到权威的 url / 大小 / 上传时间，写进 KV 索引
@@ -9,12 +9,8 @@
 // 为什么不由 blob.upload-completed 回调来做：模块体系里拿不到请求体，
 // 而回调的信息全在 body 里；页面自己调一次更直接，也方便失败重试。
 const fileIndex = require('../plugins/fileIndex.js')
-const { guard } = require('../plugins/filePass.js')
 
 module.exports = async (query) => {
-  const denied = guard(query)
-  if (denied) return denied
-
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     return {
       status: 501,

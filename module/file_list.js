@@ -21,7 +21,6 @@ const {
   gcExpired,
 } = require('../plugins/fileRetention.js')
 const fileIndex = require('../plugins/fileIndex.js')
-const { guard } = require('../plugins/filePass.js')
 
 const GC_INTERVAL_MS = 10 * 60 * 1000
 let lastGcAt = 0
@@ -87,9 +86,6 @@ async function removeOne(nameOrUrl) {
 }
 
 module.exports = async (query) => {
-  const denied = guard(query)
-  if (denied) return denied
-
   if (!fileIndex.hasKv()) return noKv()
 
   const gate = process.env.FILE_UPLOAD_KEY
