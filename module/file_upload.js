@@ -18,6 +18,7 @@ const {
   alwaysTier,
   pubUsedThisMonth,
 } = require('../plugins/fileRetention.js')
+const fileIndex = require('../plugins/fileIndex.js')
 const { guard } = require('../plugins/filePass.js')
 
 const MAX_SIZE = 200 * 1024 * 1024 // 单文件上限 200MB
@@ -107,6 +108,17 @@ module.exports = async (query) => {
   }
 
   if (!process.env.BLOB_READ_WRITE_TOKEN) return noToken()
+
+  // 公开额度的统计现在走 KV，没配就没法判断次数
+  if (!fileIndex.hasKv()) {
+    return {
+      status: 501,
+      body: {
+        code: 501,
+        msg: '未配置 KV（缺少 KV_REST_API_URL / KV_REST_API_TOKEN）',
+      },
+    }
+  }
 
   // 人机验证通行证。放在 upload-completed 分支之后：
   // 那是 Vercel Blob 的回调，不带我们的通行证，且没有任何副作用。

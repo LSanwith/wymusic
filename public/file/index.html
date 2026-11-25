@@ -763,6 +763,8 @@
                             clientPayload: JSON.stringify({ gate: getKey(), always: getAlways() }),
                             onUploadProgress: function (p) { row.progress(p.loaded, p.total); },
                         });
+                        /* 记进 KV 索引：列表 / 公开额度 / 7 天 GC 都读索引，不再 list Blob */
+                        await registerBlob(blob);
                         row.done(blob, file.size);
                     } catch (e) {
                         row.fail(e && e.message ? e.message : '上传失败');
@@ -772,6 +774,17 @@
                 $('fileInput').value = '';
                 loadBlobs();
             });
+
+            /* 上传完成后登记到索引。失败也不影响文件本身 ——
+               下一轮刷新列表或迁移时还能补上，所以这里不弹错。 */
+            async function registerBlob(blob) {
+                try {
+                    await api(withPass('/file/register?pathname=' +
+                        encodeURIComponent(String(blob.pathname || '')) +
+                        (getKey() ? '&key=' + encodeURIComponent(getKey()) : '') +
+                        '&_=' + Date.now()));
+                } catch (e) { /* 忽略 */ }
+            }
 
             /* ---------- 已上传文件 ---------- */
             async function loadBlobs() {
@@ -784,9 +797,10 @@
                     if (r.status === 501) {
                         blobList.innerHTML = '';
                         listInfo.textContent = '';
-                        showNotice('<b>还没配置 Vercel Blob，上传功能暂不可用</b>' +
-                            '到 Vercel 项目的 <b>Storage</b> 里创建一个 Blob store，' +
-                            '<code class="selectable">BLOB_READ_WRITE_TOKEN</code> 会自动注入到项目，然后重新部署即可。');
+                        showNotice('<b>文件功能还没配好，暂时不可用</b>' +
+                            '需要 Blob 存文件本体（<code class="selectable">BLOB_READ_WRITE_TOKEN</code>）' +
+                            '和 KV 存索引（<code class="selectable">KV_REST_API_URL</code> / ' +
+                            '<code class="selectable">KV_REST_API_TOKEN</code>），配好后重新部署即可。');
                         return;
                     }
                     if (r.status === 403) {
@@ -881,7 +895,7 @@
                             rm.textContent = '删除中…';
                             /* 带上时间戳绕开服务端 2 分钟的接口缓存，
                                否则删完再拉列表可能拿回删除前的旧数据 */
-                            var d = await api(withPass('/file/list?del=' + encodeURIComponent(b.url) +
+                            var d = await api(withPass('/file/list?del=' + encodeURIComponent(b.name || b.pathname) +
                                 (getKey() ? '&key=' + encodeURIComponent(getKey()) : '') +
                                 '&_=' + Date.now()));
                             if (d.ok) {

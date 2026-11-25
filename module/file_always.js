@@ -16,6 +16,7 @@ const {
   alwaysTier,
   pubUsedThisMonth,
 } = require('../plugins/fileRetention.js')
+const fileIndex = require('../plugins/fileIndex.js')
 const { guard } = require('../plugins/filePass.js')
 
 module.exports = async (query) => {
@@ -43,9 +44,9 @@ module.exports = async (query) => {
     return { status: 200, body: { code: 200, tier: 'vip' } }
   }
 
-  // 公开口令：只有配置了 Blob 才数得出已用次数
+  // 公开口令：额度由 KV 索引统计（一次 ZCOUNT，不碰 Blob）
   let used = null
-  if (process.env.BLOB_READ_WRITE_TOKEN) {
+  if (fileIndex.hasKv()) {
     try {
       used = await pubUsedThisMonth()
     } catch {

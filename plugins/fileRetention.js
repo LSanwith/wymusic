@@ -1,7 +1,7 @@
 // 文件挂载代理 · 保存期与口令策略
 // 被 module/file_*.js require，本身不是路由（plugins/ 不会被扫描成接口）。
 //
-// 保存期直接编码在 Blob 的路径前缀里，不需要额外的数据库或计数器：
+// 保存期直接编码在路径前缀里（文件本体在 Vercel Blob，索引在 KV）：
 //   tmp/        默认，上传后 7 天由 GC 删除
 //   keep-pub/   用公开口令 FileAlways 永久保存（全站每月共享 5 次）
 //   keep-vip/   用私有口令永久保存（不限次数）
@@ -9,6 +9,7 @@
 // 私有口令在公开仓库里只保存 SHA-256 哈希，无法反推原文。
 // 需要更换时设置环境变量 FILE_ALWAYS_PRIVATE_KEY（明文，优先于内置哈希）。
 const crypto = require('crypto')
+const fileIndex = require('./fileIndex.js')
 
 const PREFIX = {
   temp: 'tmp/',
@@ -64,39 +65,28 @@ function retentionOf(pathname, uploadedAt) {
   }
 }
 
-/** 本月公开口令已用次数 = keep-pub/ 下本月上传的文件数（删除后会释放名额） */
+/**
+ * 本月公开口令已用次数。
+ * 以前是 list 一遍 keep-pub/ 数文件，现在直接问 KV 索引（一次 ZCOUNT），
+ * 删除文件会同时把它从索引里摘掉，所以「删掉就还额度」的行为不变。
+ */
 async function pubUsedThisMonth() {
-  const { list } = require('@vercel/blob')
-  const now = monthKey(new Date())
-  let cursor
-  let used = 0
-  do {
-    const r = await list({ prefix: PREFIX.pub, limit: 100, cursor })
-    for (const b of r.blobs || []) {
-      if (monthKey(new Date(b.uploadedAt)) === now) used++
-    }
-    cursor = r.hasMore ? r.cursor : undefined
-  } while (cursor)
-  return used
+  return fileIndex.pubUsedThisMonth()
 }
 
-/** 删除已过期的临时文件，返回删除条数 */
+/**
+ * 删除已过期的临时文件，返回删除条数。
+ * 过期名单来自 KV 的 file:tmp（按上传时间排好序），
+ * 先删 Blob 本体、再删索引 —— 删 Blob 失败就留着条目下次再试，不会丢文件。
+ */
 async function gcExpired(limit = 300) {
-  const { list, del } = require('@vercel/blob')
-  const now = Date.now()
-  const ms = TEMP_DAYS * 24 * 3600 * 1000
-  const doomed = []
-  let cursor
-  do {
-    const r = await list({ prefix: PREFIX.temp, limit: 100, cursor })
-    for (const b of r.blobs || []) {
-      if (now - new Date(b.uploadedAt).getTime() >= ms) doomed.push(b.url)
-    }
-    cursor = r.hasMore ? r.cursor : undefined
-  } while (cursor && doomed.length < limit)
-  const batch = doomed.slice(0, limit)
-  if (batch.length) await del(batch)
-  return batch.length
+  const items = await fileIndex.expiredTemps(Date.now(), limit)
+  if (!items.length) return 0
+  const urls = items.map((it) => it.url).filter(Boolean)
+  const { del } = require('@vercel/blob')
+  if (urls.length) await del(urls)
+  for (const item of items) await fileIndex.remove(item.name)
+  return items.length
 }
 
 module.exports = {

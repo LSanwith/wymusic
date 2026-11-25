@@ -61,3 +61,15 @@
 - 管理密码在 `plugins/ttmlAdmin.js`（`TTML_ADMIN_PASS` 优先，否则比代码里的 scrypt 哈希），
   `/ttml/destroy` 与 `/ttml/migrate` 共用。
 - 单测 `test/ttml_store.test.js` 用假 KV + 假 Blob 离线跑，`pnpm test` 会一起执行，不需要网络和 token。
+
+## 文件挂载（/file/*）
+
+- 文件本体仍在 Vercel Blob（大文件要浏览器直传，KV 不适合存字节）；**索引在 KV**，见 `plugins/fileIndex.js`。
+  键：`file:items`（hash，文件名 → 元信息）、`file:byUrl`（兼容老页面按 url 删除）、
+  `file:tmp` / `file:pub`（zset，score = 上传时间毫秒，分别给 GC 和公开额度用）。
+- 列表 = 一次 HGETALL；公开额度 = 一次 ZCOUNT；7 天 GC = 一次 ZRANGEBYSCORE。
+  **不再 list Blob**（list 属于 Advanced Operations，Hobby 2K/月，超了 store 直接停用）。
+- 上传成功后页面会调 `/file/register?pathname=…` 把文件登记进索引：
+  模块体系拿不到 `blob.upload-completed` 回调的 body，所以由页面自己调。
+- 老文件迁移：Blob store 恢复（2026-12-08）后跑一次 `/file/migrate?password=<TTML_ADMIN_PASS>`，幂等。
+- 单测 `test/file_index.test.js`；假 KV / 假 Blob 在 `test/_fake_kv.js`（文件名以 `_` 开头，不是用例）。
