@@ -37,15 +37,34 @@ function isLocal() {
   return String(process.env.KV_DRIVER || '').toLowerCase() === 'local'
 }
 
+/**
+ * 是否走远程存储服务（Vercel 部署 + 自建机器当数据中心）
+ * 需要 server/storage-server.js 在那台机器上跑着。
+ */
+function isRemote() {
+  return String(process.env.KV_DRIVER || '').toLowerCase() === 'remote'
+}
+
+function remoteUrl() {
+  return String(process.env.KV_REMOTE_URL || '')
+    .trim()
+    .replace(/\/+$/, '')
+}
+
+function remoteToken() {
+  return String(process.env.KV_REMOTE_TOKEN || '').trim()
+}
+
 /** 本地数据目录 */
 function kvLocalDir() {
   const custom = String(process.env.KV_LOCAL_DIR || '').trim()
   return custom || path.join(process.cwd(), 'data', 'kv')
 }
 
-/** 配了 KV（或显式开了本地驱动）才算能用 */
+/** 配了 KV（或显式开了本地/远程驱动）才算能用 */
 function hasKv() {
   if (isLocal()) return true
+  if (isRemote()) return !!remoteUrl() && !!remoteToken()
   return !!kvUrl() && !!kvToken()
 }
 
@@ -308,9 +327,37 @@ async function kvRequest(pathname, payload) {
   return json
 }
 
+/** 远程存储服务：把整条命令发给 server/storage-server.js */
+async function remoteCommand(command) {
+  const base = remoteUrl()
+  if (!base) throw new Error('未配置远程存储（缺少 KV_REMOTE_URL）')
+  const res = await fetch(base + '/kv', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${remoteToken()}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ command }),
+  })
+  let json = null
+  try {
+    json = await res.json()
+  } catch {
+    json = null
+  }
+  if (!res.ok || !json) {
+    throw new Error(
+      `存储服务请求失败（${res.status}）：${(json && json.error) || '无响应体'}`,
+    )
+  }
+  if (json.error) throw new Error('存储服务：' + json.error)
+  return json.result
+}
+
 /** 单条命令，返回 result */
 async function kv(command) {
   if (isLocal()) return localCommand(command)
+  if (isRemote()) return remoteCommand(command)
   const json = await kvRequest('', command)
   return json ? json.result : null
 }
@@ -321,6 +368,13 @@ async function kvPipeline(commands) {
   if (isLocal()) {
     const out = []
     for (const command of commands) out.push(await localCommand(command))
+    return out
+  }
+  if (isRemote()) {
+    // 存储服务目前只接受单条命令，这里顺序执行。
+    // 一次 pipeline 的命令数很少（几条），多几次往返可以接受。
+    const out = []
+    for (const command of commands) out.push(await remoteCommand(command))
     return out
   }
   const results = await kvRequest('/pipeline', commands)
@@ -339,4 +393,6 @@ module.exports = {
   kvPipeline,
   isLocal,
   kvLocalDir,
+  isRemote,
+  remoteUrl,
 }
