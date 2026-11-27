@@ -38,30 +38,17 @@ module.exports = async (query) => {
     }
   }
 
-  // 自建存储模式下，blob 地址要带令牌才能读，不能直接 302 给浏览器，
-  // 由这里代理一次把字节转发出去。Vercel Blob 模式仍然是 302（更省流量）。
+  // 自建存储模式下给一个 10 分钟有效的签名地址，直接 302 过去：
+  // 文件不经过 Vercel 函数（函数响应体有 4.5MB 上限，大文件代理不动）
   if (blobStore.isRemote()) {
-    let res
-    try {
-      res = await blobStore.get(target)
-    } catch (e) {
-      return {
-        status: 502,
-        body: { code: 502, msg: '存储服务不可用：' + (e.message || e) },
-      }
+    const key = blobStore.keyOf(target)
+    if (!key) {
+      return { status: 404, body: { code: 404, msg: '文件地址无效' } }
     }
-    if (!res || !res.ok) {
-      return { status: 404, body: { code: 404, msg: '文件已不存在' } }
-    }
-    const buf = Buffer.from(await res.arrayBuffer())
     return {
-      status: 200,
-      headers: {
-        'content-type': item.contentType || 'application/octet-stream',
-        'content-length': String(buf.length),
-        'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
-      },
-      body: buf,
+      status: 302,
+      body: '',
+      redirectUrl: blobStore.signedFileUrl(key, 10 * 60 * 1000),
     }
   }
 

@@ -293,6 +293,33 @@ async function localCommand(command) {
       }
       return n
     }
+    case 'ZRANGEBYSCORE': {
+      const dir = zsetPath(command[1])
+      const min = scoreBound(command[2], -Infinity)
+      const max = scoreBound(command[3], Infinity)
+      let offset = 0
+      let limit = Infinity
+      for (let i = 4; i < command.length; i++) {
+        if (String(command[i]).toUpperCase() === 'LIMIT') {
+          offset = Number(command[i + 1]) || 0
+          limit = Number(command[i + 2])
+          if (!Number.isFinite(limit)) limit = Infinity
+        }
+      }
+      const rows = []
+      for (const name of await listDir(dir)) {
+        try {
+          const score = Number(await fsp.readFile(path.join(dir, name), 'utf8'))
+          if (Number.isFinite(score) && score >= min && score <= max) {
+            rows.push([decodeURIComponent(name), score])
+          }
+        } catch {
+          /* 读不到就跳过 */
+        }
+      }
+      rows.sort((a, b) => a[1] - b[1])
+      return rows.slice(offset, offset + limit).map((r) => r[0])
+    }
     default:
       throw new Error(`本地 KV 驱动不支持命令：${name}`)
   }

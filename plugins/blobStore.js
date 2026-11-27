@@ -9,7 +9,7 @@
 // 对外接口刻意和 @vercel/blob 保持一致（put / head / del / list），
 // 这样调用方只改 require 那一行，业务逻辑不动。
 
-const path = require('path')
+const crypto = require('crypto')
 
 function driver() {
   return String(process.env.BLOB_DRIVER || 'vercel').toLowerCase()
@@ -56,6 +56,20 @@ function keyOf(input) {
     }
   }
   return raw.replace(/^\/+/, '')
+}
+
+/**
+ * 远程模式下「免令牌读」的签名地址。
+ * 下载走 302 直接打到存储机，不经过 Vercel 函数（函数响应有 4.5MB 上限）。
+ * 签名算法与 server/storage-server.js 的 signedOk 一致：HMAC(key|exp)。
+ */
+function signedFileUrl(key, ttlMs) {
+  const exp = Date.now() + (ttlMs || 10 * 60 * 1000)
+  const sig = crypto
+    .createHmac('sha256', remoteToken())
+    .update(`${key}|${exp}`)
+    .digest('base64url')
+  return `${remoteUrl()}/blob?key=${encodeURIComponent(key)}&exp=${exp}&sig=${sig}`
 }
 
 /** 远程模式下对外暴露的地址（交给 /file/get 做代理，不直接给浏览器） */
@@ -216,5 +230,6 @@ module.exports = {
   hasBlob,
   isRemote,
   remoteFileUrl,
+  signedFileUrl,
   driver,
 }

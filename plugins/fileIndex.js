@@ -245,7 +245,20 @@ async function migrateFromBlob(options) {
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     throw new Error('未配置 BLOB_READ_WRITE_TOKEN，无法读取老的 Blob 数据')
   }
-  const { list } = require('./blobStore.js')
+  // 老数据在 Vercel Blob：列表和读字节都直连它，
+  // 写回则走当前驱动（remote 时就是把它搬到自建机器上）
+  const { list, get } = require('@vercel/blob')
+  const blobStore = require('./blobStore.js')
+
+  /** 读出老 Blob 的字节 */
+  async function readOld(pathname) {
+    const res = await get(pathname, { access: 'public', useCache: false })
+    if (!res || !res.stream) throw new Error('读不到老文件：' + pathname)
+    const chunks = []
+    for await (const chunk of res.stream) chunks.push(Buffer.from(chunk))
+    return Buffer.concat(chunks)
+  }
+
   let migrated = 0
   for (const tier of TIERS) {
     let cursor
@@ -258,12 +271,16 @@ async function migrateFromBlob(options) {
       for (const blob of page.blobs || []) {
         const pathname = String(blob.pathname || '')
         if (!pathname) continue
+        const stored = await blobStore.put(pathname, await readOld(pathname), {
+          access: 'public',
+          contentType: blob.contentType,
+        })
         await put({
           name: baseName(pathname),
           pathname,
-          url: blob.url,
-          downloadUrl: blob.downloadUrl || blob.url,
-          size: blob.size,
+          url: stored.url,
+          downloadUrl: stored.downloadUrl || stored.url,
+          size: stored.size || blob.size,
           contentType: blob.contentType,
           uploadedAt: blob.uploadedAt,
           tier: tierOfPathname(pathname) || tier,

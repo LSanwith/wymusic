@@ -9,14 +9,15 @@
 // 为什么不由 blob.upload-completed 回调来做：模块体系里拿不到请求体，
 // 而回调的信息全在 body 里；页面自己调一次更直接，也方便失败重试。
 const fileIndex = require('../plugins/fileIndex.js')
+const blobStore = require('../plugins/blobStore.js')
 
 module.exports = async (query) => {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+  if (!blobStore.hasBlob()) {
     return {
       status: 501,
       body: {
         code: 501,
-        msg: '未配置 Vercel Blob（缺少 BLOB_READ_WRITE_TOKEN）',
+        msg: '未配置文件存储（Vercel Blob 或自建存储）',
       },
     }
   }

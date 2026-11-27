@@ -11,14 +11,15 @@
 // （人机验证 2026-11 已停用，见 module/file_verify.js 的说明。）
 const { TEMP_DAYS, gcExpired } = require('../plugins/fileRetention.js')
 const fileIndex = require('../plugins/fileIndex.js')
+const blobStore = require('../plugins/blobStore.js')
 
 module.exports = async (query) => {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+  if (!blobStore.hasBlob()) {
     return {
       status: 501,
       body: {
         code: 501,
-        msg: '未配置 Vercel Blob（缺少 BLOB_READ_WRITE_TOKEN）',
+        msg: '未配置文件存储（Vercel Blob 或自建存储）',
       },
     }
   }

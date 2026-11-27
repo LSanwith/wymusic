@@ -268,6 +268,33 @@ async function runCommand(command) {
       }
       return n
     }
+    case 'ZRANGEBYSCORE': {
+      const dir = zsetPath(command[1])
+      const min = scoreBound(command[2], -Infinity)
+      const max = scoreBound(command[3], Infinity)
+      let offset = 0
+      let limit = Infinity
+      for (let i = 4; i < command.length; i++) {
+        if (String(command[i]).toUpperCase() === 'LIMIT') {
+          offset = Number(command[i + 1]) || 0
+          limit = Number(command[i + 2])
+          if (!Number.isFinite(limit)) limit = Infinity
+        }
+      }
+      const rows = []
+      for (const name of await listDir(dir)) {
+        try {
+          const score = Number(await fsp.readFile(path.join(dir, name), 'utf8'))
+          if (Number.isFinite(score) && score >= min && score <= max) {
+            rows.push([decodeURIComponent(name), score])
+          }
+        } catch {
+          /* 跳过 */
+        }
+      }
+      rows.sort((a, b) => a[1] - b[1])
+      return rows.slice(offset, offset + limit).map((r) => r[0])
+    }
     default:
       throw new Error('不支持的命令：' + name)
   }
@@ -347,7 +374,7 @@ function readBody(req, limit) {
   })
 }
 
-const MAX_BODY = Number(process.env.STORAGE_MAX_BODY || 32 * 1024 * 1024)
+const MAX_BODY = Number(process.env.STORAGE_MAX_BODY || 210 * 1024 * 1024)
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost')
@@ -358,13 +385,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/health') return json(res, 200, { ok: true })
 
-    // 浏览器直传：PUT /blob?key=&exp=&sig=，有效期内免 Bearer
-    const signedPut =
-      req.method === 'PUT' &&
+    // 签名地址：PUT（浏览器直传）与 GET/HEAD（下载 302 过来）都免 Bearer
+    const signedRequest =
+      ['PUT', 'GET', 'HEAD'].includes(req.method) &&
       url.pathname === '/blob' &&
       signedOk(url, String(url.searchParams.get('key') || ''))
 
-    if (!authorized(req) && !signedPut) {
+    if (!authorized(req) && !signedRequest) {
       return json(res, 401, { error: 'unauthorized' })
     }
 
@@ -391,11 +418,38 @@ const server = http.createServer(async (req, res) => {
       const file = blobPath(key)
 
       if (req.method === 'PUT') {
-        const body = await readBody(req, MAX_BODY)
-        await writeAtomic(file, body)
+        const declared = Number(req.headers['content-length'] || 0)
+        if (declared && declared > MAX_BODY) {
+          return json(res, 413, { error: `文件超过上限（${MAX_BODY} 字节）` })
+        }
+        await fsp.mkdir(path.dirname(file), { recursive: true })
+        const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+        let size = 0
+        try {
+          await new Promise((resolve, reject) => {
+            const out = fs.createWriteStream(tmp)
+            req.on('data', (chunk) => {
+              size += chunk.length
+              if (size > MAX_BODY) {
+                reject(new Error('文件超过上限'))
+                req.destroy()
+              }
+            })
+            req.pipe(out)
+            out.on('finish', resolve)
+            out.on('error', reject)
+            req.on('error', reject)
+          })
+          await fsp.rename(tmp, file)
+        } catch (e) {
+          await fsp.unlink(tmp).catch(() => {})
+          return json(res, e.message === '文件超过上限' ? 413 : 500, {
+            error: String(e.message || e),
+          })
+        }
         return json(res, 200, {
           key,
-          size: body.length,
+          size,
           url: `/blob?key=${encodeURIComponent(key)}`,
         })
       }

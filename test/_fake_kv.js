@@ -255,6 +255,25 @@ function makeFakeBlob() {
         etag: etag(rec.text),
       }
     },
+    async put(pathname, body, options = {}) {
+      const key = toPath(pathname)
+      const text =
+        typeof body === 'string' ? body : Buffer.from(body).toString('utf8')
+      const uploadedAt = new Date().toISOString()
+      files.set(key, {
+        text,
+        contentType: options.contentType || 'text/plain',
+        uploadedAt,
+      })
+      return {
+        url: urlOf(key),
+        downloadUrl: urlOf(key) + '?download=1',
+        pathname: key,
+        size: Buffer.byteLength(text),
+        uploadedAt,
+        contentType: options.contentType || 'text/plain',
+      }
+    },
     async del(input) {
       const list = Array.isArray(input) ? input : [input]
       for (const one of list) files.delete(toPath(one))
