@@ -379,6 +379,13 @@
             function ensureOneRow() {
                 if (!idList.querySelector('.id-row')) addIdRow('');
             }
+            /** 清空所有 id（载入新文件 / 搜新歌时用） */
+            function clearIds() {
+                idList.innerHTML = '';
+                ensureOneRow();
+                renumber();
+                if (songSearch) songSearch.refreshUsed();
+            }
             function collectIds() {
                 var out = collectIdsRaw();
                 // 去重
@@ -442,6 +449,8 @@
                     hint: '点一下填入 id，再点一下从列表移除；已填的会标绿',
                     getUsedIds: collectIds,
                     onPick: function (song) { toggleSongId(song.id); },
+                    // 换了关键词去搜另一首歌：旧的 id 先清掉，避免接着上一首的残留
+                    onSearch: function (kw, isNew) { if (isNew) clearIds(); },
                 });
             }
 
@@ -478,6 +487,8 @@
                     var baseName = String(f.name || '').replace(/\.[^.]+$/, '').trim();
                     var sid = songIdFromName(f.name);
                     var kw = sid || baseName;
+                    // 装的是新文件：先把上一份留下的 id 全清掉
+                    clearIds();
                     if (kw && songSearch) songSearch.search(kw);
                     if (sid) {
                         toggleSongId(sid);

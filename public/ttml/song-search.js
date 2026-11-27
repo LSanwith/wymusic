@@ -186,6 +186,8 @@
       refreshUsed()
     }
 
+    var lastKeyword = ''
+
     function search() {
       var kw = input.value.trim()
       if (!kw) {
@@ -193,6 +195,10 @@
         state.textContent = '先输入歌名或歌曲 id。'
         return
       }
+      // 换了个关键词 = 开始找另一首歌：通知调用方清掉之前填的 id
+      var isNew = kw.toLowerCase() !== lastKeyword
+      lastKeyword = kw.toLowerCase()
+      if (opts.onSearch) opts.onSearch(kw, isNew)
       var key = kw.toLowerCase()
       var hit = cache[key]
       if (hit && Date.now() - hit.at < CACHE_MS) {
