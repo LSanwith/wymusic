@@ -46,7 +46,7 @@ module.exports = async (query) => {
     }
   }
 
-  const { head } = require('@vercel/blob')
+  const { head } = require('../plugins/blobStore.js')
   let meta
   try {
     meta = await head(pathname)
