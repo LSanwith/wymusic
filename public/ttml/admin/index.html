@@ -220,6 +220,17 @@
                         a.rel = 'noopener';
                         a.textContent = '预览';
                         acts.appendChild(a);
+
+                        // 直接看 API 返回（JSON）：按这首歌的第一个 id 调 /search?ttml=
+                        var api = document.createElement('a');
+                        api.className = 'hint';
+                        api.href = '/search?ttml=' + encodeURIComponent(it.ids[0]);
+                        api.target = '_blank';
+                        api.rel = 'noopener';
+                        api.textContent = '接口';
+                        api.title = '这个 id 的接口返回：/search?ttml=' + it.ids[0] +
+                            '（JSON，多绑定时默认第一个）';
+                        acts.appendChild(api);
                     }
                     var del = document.createElement('button');
                     del.type = 'button';
@@ -288,6 +299,16 @@
                     a.rel = 'noopener';
                     a.textContent = '预览';
                     acts.appendChild(a);
+
+                    var api = document.createElement('a');
+                    api.className = 'hint';
+                    api.href = '/search?ttml=' + encodeURIComponent(it.songId);
+                    api.target = '_blank';
+                    api.rel = 'noopener';
+                    api.textContent = '接口';
+                    api.title = '这个 id 的接口返回：/search?ttml=' + it.songId + '（JSON）';
+                    acts.appendChild(api);
+
                     var del = document.createElement('button');
                     del.type = 'button';
                     del.className = 'danger';
