@@ -245,7 +245,7 @@ async function migrateFromBlob(options) {
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     throw new Error('未配置 BLOB_READ_WRITE_TOKEN，无法读取老的 Blob 数据')
   }
-  const { list } = require('@vercel/blob')
+  const { list } = require('./blobStore.js')
   let migrated = 0
   for (const tier of TIERS) {
     let cursor
