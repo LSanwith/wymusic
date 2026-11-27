@@ -108,6 +108,18 @@ module.exports = async (query) => {
     return { status: 400, body: { code: 400, msg: '未知的事件类型' } }
   }
 
+  // 文件挂载暂时下线：服务器上下行吃紧，先不开放上传。
+  // 要恢复就把 Vercel 里的 FILE_UPLOAD_ENABLED 设成 '1'。
+  if (String(process.env.FILE_UPLOAD_ENABLED || '') !== '1') {
+    return {
+      status: 503,
+      body: {
+        code: 503,
+        msg: '文件挂载暂停使用（服务器带宽有限，先只保留 TTML 接口）',
+      },
+    }
+  }
+
   // 自建存储不需要 Vercel 的 BLOB_READ_WRITE_TOKEN
   if (!blobStore.hasBlob()) return noToken()
 

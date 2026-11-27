@@ -219,7 +219,6 @@
     <nav class="nav">
         <div class="nav-list">
             <a href="/">音乐界面</a>
-            <a href="/file/" class="active">文件挂载代理</a>
             <a href="/ttml/">TTML 歌词</a>
             <a href="/ttml/admin/">TTML 管理</a>
         </div>
@@ -233,6 +232,10 @@
     <main class="container">
         <header class="site-header">
             <h1>文件挂载代理</h1>
+            <div class="hint err" style="margin:6px 0 14px">
+                已暂停使用：服务器上下行带宽有限，目前只保留 TTML 接口。
+                要重新开启，在 Vercel 项目里把 <code class="selectable">FILE_UPLOAD_ENABLED</code> 设成 <code class="selectable">1</code> 即可。
+            </div>
             <p class="sub">上传文件 · 永久保存</p>
         </header>
 
