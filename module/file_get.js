@@ -8,6 +8,7 @@
 // 地址从 KV 索引里查（一次 HGET），不再对三个目录轮流 head ——
 // 那样每下载一次要 3 次 Simple Operation，而且 Blob 额度超了就直接 403。
 const fileIndex = require('../plugins/fileIndex.js')
+const blobStore = require('../plugins/blobStore.js')
 
 module.exports = async (query) => {
   if (!fileIndex.hasKv()) {
@@ -34,6 +35,33 @@ module.exports = async (query) => {
         code: 404,
         msg: '文件不存在或已过期（临时文件 7 天后会被清理）',
       },
+    }
+  }
+
+  // 自建存储模式下，blob 地址要带令牌才能读，不能直接 302 给浏览器，
+  // 由这里代理一次把字节转发出去。Vercel Blob 模式仍然是 302（更省流量）。
+  if (blobStore.isRemote()) {
+    let res
+    try {
+      res = await blobStore.get(target)
+    } catch (e) {
+      return {
+        status: 502,
+        body: { code: 502, msg: '存储服务不可用：' + (e.message || e) },
+      }
+    }
+    if (!res || !res.ok) {
+      return { status: 404, body: { code: 404, msg: '文件已不存在' } }
+    }
+    const buf = Buffer.from(await res.arrayBuffer())
+    return {
+      status: 200,
+      headers: {
+        'content-type': item.contentType || 'application/octet-stream',
+        'content-length': String(buf.length),
+        'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+      },
+      body: buf,
     }
   }
 
