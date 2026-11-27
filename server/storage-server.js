@@ -276,7 +276,7 @@ async function runCommand(command) {
 // ---------- HTTP ----------
 
 function send(res, code, body, headers) {
-  const h = Object.assign({}, headers)
+  const h = Object.assign({}, CORS, headers)
   res.writeHead(code, h)
   res.end(body)
 }
@@ -298,6 +298,35 @@ function authorized(req) {
   } catch {
     return false
   }
+}
+
+/** 给浏览器直传用的短期签名：sig = HMAC(key|exp) */
+function signKey(key, exp) {
+  return crypto
+    .createHmac('sha256', TOKEN)
+    .update(`${key}|${exp}`)
+    .digest('base64url')
+}
+
+/** 校验 ?exp=&sig=，允许在有效期内免 Bearer 写入 */
+function signedOk(url, key) {
+  const exp = Number(url.searchParams.get('exp') || 0)
+  const sig = String(url.searchParams.get('sig') || '')
+  if (!exp || Date.now() > exp || !sig) return false
+  const want = signKey(key, exp)
+  if (sig.length !== want.length) return false
+  try {
+    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(want))
+  } catch {
+    return false
+  }
+}
+
+const CORS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET,PUT,POST,HEAD,DELETE,OPTIONS',
+  'access-control-allow-headers': 'authorization,content-type',
+  'access-control-max-age': '86400',
 }
 
 function readBody(req, limit) {
@@ -323,8 +352,21 @@ const MAX_BODY = Number(process.env.STORAGE_MAX_BODY || 32 * 1024 * 1024)
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost')
   try {
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, CORS)
+      return res.end()
+    }
     if (url.pathname === '/health') return json(res, 200, { ok: true })
-    if (!authorized(req)) return json(res, 401, { error: 'unauthorized' })
+
+    // 浏览器直传：PUT /blob?key=&exp=&sig=，有效期内免 Bearer
+    const signedPut =
+      req.method === 'PUT' &&
+      url.pathname === '/blob' &&
+      signedOk(url, String(url.searchParams.get('key') || ''))
+
+    if (!authorized(req) && !signedPut) {
+      return json(res, 401, { error: 'unauthorized' })
+    }
 
     if (url.pathname === '/kv' && req.method === 'POST') {
       const raw = await readBody(req, 8 * 1024 * 1024)
