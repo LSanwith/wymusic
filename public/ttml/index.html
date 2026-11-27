@@ -445,14 +445,41 @@
                 });
             }
 
-            /* ---------- 选文件填进 textarea ---------- */
+            /* ---------- 选文件填进 textarea，并顺手从文件名里抠出歌曲 id ---------- */
+            /**
+             * 从文件名里找网易云歌曲 id：
+             *   186016.ttml / 晴天 - 186016.ttml / 186016_晴天.ttml 都能认。
+             * 取最长的一串数字（≥5 位），避开 20261128 这种更长的日期串：
+             * 日期是 8 位而且常和年份开头，这里优先选 5~12 位、且不以 19/20 开头的。
+             */
+            function songIdFromName(name) {
+                var base = String(name || '').replace(/\.[^.]+$/, '');
+                var runs = base.match(/\d{5,12}/g) || [];
+                if (!runs.length) return '';
+                var prefer = runs.filter(function (r) {
+                    return !/^(19|20)\d{6}$/.test(r); // 20261128 这类日期
+                });
+                var pool = prefer.length ? prefer : runs;
+                pool.sort(function (a, b) { return b.length - a.length; });
+                return pool[0];
+            }
+
             $('ttmlFile').addEventListener('change', function () {
                 var f = this.files && this.files[0];
                 if (!f) return;
                 var reader = new FileReader();
                 reader.onload = function () {
                     ttmlText.value = String(reader.result || '');
-                    setResult('已读入 ' + f.name + '（' + ttmlText.value.length + ' 字符）', 'ok');
+                    var msg = '已读入 ' + f.name + '（' + ttmlText.value.length + ' 字符）';
+
+                    // 文件名里带了歌曲 id：直接填进 id 列表，并搜一下让页面显示歌名
+                    var sid = songIdFromName(f.name);
+                    if (sid) {
+                        toggleSongId(sid);
+                        if (songSearch) songSearch.search(sid);
+                        msg += '，已自动填入歌曲 id ' + sid;
+                    }
+                    setResult(msg, 'ok');
                 };
                 reader.onerror = function () { setResult('读文件失败', 'err'); };
                 reader.readAsText(f, 'utf-8');

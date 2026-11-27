@@ -237,6 +237,13 @@
 
     return {
       focus: function () { input.focus() },
+      /** 把关键词填进输入框并立即搜一次（文件名里读到 id 时用） */
+      search: function (keywords) {
+        var kw = String(keywords == null ? '' : keywords).trim()
+        if (!kw) return
+        input.value = kw
+        search()
+      },
       refreshUsed: refreshUsed,
       clear: function () {
         input.value = ''
