@@ -472,12 +472,18 @@
                     ttmlText.value = String(reader.result || '');
                     var msg = '已读入 ' + f.name + '（' + ttmlText.value.length + ' 字符）';
 
-                    // 文件名里带了歌曲 id：直接填进 id 列表，并搜一下让页面显示歌名
+                    // 文件名当关键词自动搜一次：
+                    //   带 id 的（晴天-186016.ttml）→ 搜 id，并直接填进 id 列表
+                    //   只有歌名的（House Tour.ttml）→ 搜歌名，点结果就能用
+                    var baseName = String(f.name || '').replace(/\.[^.]+$/, '').trim();
                     var sid = songIdFromName(f.name);
+                    var kw = sid || baseName;
+                    if (kw && songSearch) songSearch.search(kw);
                     if (sid) {
                         toggleSongId(sid);
-                        if (songSearch) songSearch.search(sid);
                         msg += '，已自动填入歌曲 id ' + sid;
+                    } else if (kw) {
+                        msg += '，已按文件名「' + kw + '」搜索';
                     }
                     setResult(msg, 'ok');
                 };
