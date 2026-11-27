@@ -78,7 +78,7 @@ async function removeOne(nameOrUrl) {
   if (!item) return { ok: false, msg: '这个文件不在列表里（可能已被清理）' }
 
   if (item.url) {
-    const { del } = require('@vercel/blob')
+    const { del } = require('../plugins/blobStore.js')
     await del(item.url)
   }
   await fileIndex.remove(name)
