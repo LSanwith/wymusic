@@ -83,7 +83,7 @@ async function gcExpired(limit = 300) {
   const items = await fileIndex.expiredTemps(Date.now(), limit)
   if (!items.length) return 0
   const urls = items.map((it) => it.url).filter(Boolean)
-  const { del } = require('@vercel/blob')
+  const { del } = require('./blobStore.js')
   if (urls.length) await del(urls)
   for (const item of items) await fileIndex.remove(item.name)
   return items.length
