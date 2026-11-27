@@ -263,7 +263,14 @@ async function constructServer(moduleDefs) {
   /**
    * Cache
    */
-  app.use(cache('2 minutes', (_, res) => res.statusCode === 200))
+  // 只缓存 GET：POST（提交审核、上传、删除…）按 URL 缓存会把上一次的响应
+  // 直接回给下一次请求 —— 表现就是「换了内容重新提交，结果还是旧的」。
+  app.use(
+    cache(
+      '2 minutes',
+      (req, res) => req.method === 'GET' && res.statusCode === 200,
+    ),
+  )
 
   /**
    * Special Routers
