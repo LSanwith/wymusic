@@ -757,12 +757,37 @@
                     var row = addRow(uploadList, file.name);
                     row.meta(fmtSize(file.size) + (folder === 'tmp' ? ' · 7 天有效' : ' · 永久保存'));
                     try {
-                        var blob = await sdk.upload(folder + '/' + file.name, file, {
-                            access: 'public',
-                            handleUploadUrl: withPass('/file/upload'),
-                            clientPayload: JSON.stringify({ gate: getKey(), always: getAlways() }),
-                            onUploadProgress: function (p) { row.progress(p.loaded, p.total); },
+                        var key = folder + '/' + file.name;
+                        /* 先问服务端怎么传：
+                           - Vercel Blob 模式 → 返回客户端令牌，交给 SDK 直传
+                           - 自建存储模式   → 返回签名直传地址，直接 PUT 过去 */
+                        var prepRes = await fetch(withPass('/file/upload'), {
+                            method: 'POST',
+                            headers: { 'content-type': 'application/json' },
+                            body: JSON.stringify({
+                                type: 'blob.generate-client-token',
+                                payload: {
+                                    pathname: key,
+                                    clientPayload: JSON.stringify({ gate: getKey(), always: getAlways() }),
+                                },
+                            }),
                         });
+                        var prep = await prepRes.json();
+                        if (!prepRes.ok) throw new Error(prep.msg || ('准备上传失败 HTTP ' + prepRes.status));
+
+                        var blob;
+                        if (prep && prep.mode === 'direct') {
+                            var putRes = await fetch(prep.url, { method: 'PUT', body: file });
+                            if (!putRes.ok) throw new Error('写入存储服务失败 HTTP ' + putRes.status);
+                            blob = { pathname: prep.pathname, url: '', downloadUrl: '' };
+                        } else {
+                            blob = await sdk.upload(key, file, {
+                                access: 'public',
+                                handleUploadUrl: withPass('/file/upload'),
+                                clientPayload: JSON.stringify({ gate: getKey(), always: getAlways() }),
+                                onUploadProgress: function (p) { row.progress(p.loaded, p.total); },
+                            });
+                        }
                         /* 记进 KV 索引：列表 / 公开额度 / 7 天 GC 都读索引，不再 list Blob */
                         await registerBlob(blob);
                         row.done(blob, file.size);
