@@ -517,7 +517,10 @@ const server = http.createServer(async (req, res) => {
   }
 })
 
-server.listen(PORT, () => {
+// 默认只听本机（nginx 在前面做 TLS 反代）；要直接对外就把 STORAGE_HOST 设成 0.0.0.0
+const HOST = String(process.env.STORAGE_HOST || '127.0.0.1').trim()
+
+server.listen(PORT, HOST, () => {
   console.log(`storage-server 监听 :${PORT}`)
   console.log(`数据目录: ${DIR}`)
   console.log(`KV: ${KV_DIR}`)
