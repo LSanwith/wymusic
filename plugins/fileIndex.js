@@ -127,8 +127,9 @@ async function remove(nameOrUrl) {
   if (!item) return null
   const commands = [
     ['HDEL', KEY_ITEMS, name],
-    ['HDEL', KEY_TMP, name],
-    ['HDEL', KEY_PUB, name],
+    // 这里以前误写成 HDEL 有序集合（无效），导致删除后额度/GC 里还留着名字
+    ['ZREM', KEY_TMP, name],
+    ['ZREM', KEY_PUB, name],
   ]
   if (item.url) commands.push(['HDEL', KEY_BY_URL, item.url])
   await kvPipeline(commands)
