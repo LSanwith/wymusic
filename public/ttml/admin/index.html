@@ -213,14 +213,6 @@
                     acts.className = 'row';
                     acts.style.gap = '8px';
                     if (it.ids.length) {
-                        var a = document.createElement('a');
-                        a.className = 'hint';
-                        a.href = '/ttml/preview/?id=' + encodeURIComponent(it.ids[0]);
-                        a.target = '_blank';
-                        a.rel = 'noopener';
-                        a.textContent = '预览';
-                        acts.appendChild(a);
-
                         // 直接看 API 返回（JSON）：按这首歌的第一个 id 调 /search?ttml=
                         var api = document.createElement('a');
                         api.className = 'hint';
@@ -231,6 +223,14 @@
                         api.title = '这个 id 的接口返回：/search?ttml=' + it.ids[0] +
                             '（JSON，多绑定时默认第一个）';
                         acts.appendChild(api);
+
+                        var a = document.createElement('a');
+                        a.className = 'hint';
+                        a.href = '/ttml/preview/?id=' + encodeURIComponent(it.ids[0]);
+                        a.target = '_blank';
+                        a.rel = 'noopener';
+                        a.textContent = '预览';
+                        acts.appendChild(a);
                     }
                     var del = document.createElement('button');
                     del.type = 'button';
@@ -292,14 +292,6 @@
                     var acts = document.createElement('div');
                     acts.className = 'row';
                     acts.style.gap = '8px';
-                    var a = document.createElement('a');
-                    a.className = 'hint';
-                    a.href = '/ttml/preview/?id=' + encodeURIComponent(it.songId);
-                    a.target = '_blank';
-                    a.rel = 'noopener';
-                    a.textContent = '预览';
-                    acts.appendChild(a);
-
                     var api = document.createElement('a');
                     api.className = 'hint';
                     api.href = '/search?ttml=' + encodeURIComponent(it.songId);
@@ -308,6 +300,14 @@
                     api.textContent = '接口';
                     api.title = '这个 id 的接口返回：/search?ttml=' + it.songId + '（JSON）';
                     acts.appendChild(api);
+
+                    var a = document.createElement('a');
+                    a.className = 'hint';
+                    a.href = '/ttml/preview/?id=' + encodeURIComponent(it.songId);
+                    a.target = '_blank';
+                    a.rel = 'noopener';
+                    a.textContent = '预览';
+                    acts.appendChild(a);
 
                     var del = document.createElement('button');
                     del.type = 'button';
