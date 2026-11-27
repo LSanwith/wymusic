@@ -18,7 +18,9 @@ const {
   alwaysTier,
   pubUsedThisMonth,
 } = require('../plugins/fileRetention.js')
+const crypto = require('crypto')
 const fileIndex = require('../plugins/fileIndex.js')
+const blobStore = require('../plugins/blobStore.js')
 
 const MAX_SIZE = 200 * 1024 * 1024 // 单文件上限 200MB
 
@@ -106,7 +108,8 @@ module.exports = async (query) => {
     return { status: 400, body: { code: 400, msg: '未知的事件类型' } }
   }
 
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return noToken()
+  // 自建存储不需要 Vercel 的 BLOB_READ_WRITE_TOKEN
+  if (!blobStore.hasBlob()) return noToken()
 
   // 公开额度的统计现在走 KV，没配就没法判断次数
   if (!fileIndex.hasKv()) {
@@ -173,6 +176,29 @@ module.exports = async (query) => {
         status: 403,
         body: { code: 403, msg: '永久保存目录需要先填对永久保存口令' },
       }
+    }
+  }
+
+  // 自建存储：不给 Vercel 客户端令牌，改为签发一个 10 分钟有效的直传地址。
+  // 签名算法与 server/storage-server.js 里的 signedOk 一致：HMAC(key|exp)。
+  if (blobStore.isRemote()) {
+    const secret =
+      process.env.BLOB_REMOTE_TOKEN || process.env.STORAGE_TOKEN || ''
+    const key = parsed.pathname
+    const exp = Date.now() + 10 * 60 * 1000
+    const sig = crypto
+      .createHmac('sha256', secret)
+      .update(`${key}|${exp}`)
+      .digest('base64url')
+    const base = String(process.env.BLOB_REMOTE_URL || '').replace(/\/+$/, '')
+    return {
+      status: 200,
+      body: {
+        type,
+        mode: 'direct',
+        pathname: key,
+        url: `${base}/blob?key=${encodeURIComponent(key)}&exp=${exp}&sig=${sig}`,
+      },
     }
   }
 
