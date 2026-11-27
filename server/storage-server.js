@@ -92,6 +92,34 @@ function scoreBound(raw, fallback) {
   return Number.isFinite(n) ? n : fallback
 }
 
+/** 按扩展名给个像样的 Content-Type（下载/预览都靠它） */
+function contentTypeOf(name) {
+  const ext = String(name).toLowerCase().split('.').pop()
+  const map = {
+    md: 'text/markdown; charset=utf-8',
+    txt: 'text/plain; charset=utf-8',
+    html: 'text/html; charset=utf-8',
+    json: 'application/json; charset=utf-8',
+    xml: 'application/xml; charset=utf-8',
+    ttml: 'application/ttml+xml; charset=utf-8',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    svg: 'image/svg+xml',
+    mp3: 'audio/mpeg',
+    flac: 'audio/flac',
+    m4a: 'audio/mp4',
+    mp4: 'video/mp4',
+    webm: 'video/webm',
+    pdf: 'application/pdf',
+    zip: 'application/zip',
+    sb3: 'application/octet-stream',
+  }
+  return map[ext] || 'application/octet-stream'
+}
+
 // ---------- KV 命令（与 plugins/kvStore.js 本地驱动保持一致）----------
 
 async function runCommand(command) {
@@ -456,9 +484,18 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'GET') {
         try {
           const stat = await fsp.stat(file)
+          const name = key.split('/').pop()
+          const inline = url.searchParams.get('inline') === '1'
+          const ascii = encodeURIComponent(name).replace(/%/g, '_').replace(/[^A-Za-z0-9._-]/g, '_') || 'file'
           res.writeHead(200, {
-            'content-type': 'application/octet-stream',
+            'content-type': contentTypeOf(name),
             'content-length': stat.size,
+            // 下载时保留原文件名（中文用 RFC 5987 的 filename*）
+            'content-disposition':
+              (inline ? 'inline' : 'attachment') +
+              `; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+            'cache-control': 'public, max-age=31536000, immutable',
+            'accept-ranges': 'bytes',
           })
           fs.createReadStream(file).pipe(res)
         } catch {

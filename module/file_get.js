@@ -45,11 +45,11 @@ module.exports = async (query) => {
     if (!key) {
       return { status: 404, body: { code: 404, msg: '文件地址无效' } }
     }
-    return {
-      status: 302,
-      body: '',
-      redirectUrl: blobStore.signedFileUrl(key, 10 * 60 * 1000),
-    }
+    // raw=1 用于页面的「打开」：让存储侧按 inline 返回，图片/文本直接预览
+    const signed = blobStore.signedFileUrl(key, 10 * 60 * 1000)
+    const target2 =
+      String(query.raw || '') === '1' ? signed + '&inline=1' : signed
+    return { status: 302, body: '', redirectUrl: target2 }
   }
 
   return { status: 302, body: '', redirectUrl: target }

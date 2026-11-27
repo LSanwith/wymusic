@@ -684,7 +684,9 @@
                                 encodeURIComponent(String(blob.pathname || '').split('/').pop()));
                         }));
                         m.appendChild(btn('打开', function () {
-                            window.open(url, '_blank', 'noopener');
+                            /* raw=1：让存储侧 inline 返回，图片/文本直接预览 */
+                            window.open(String(url) + (String(url).indexOf('?') >= 0 ? '&' : '?') +
+                                'raw=1', '_blank', 'noopener');
                         }));
                         m.appendChild(btn('复制链接', function () {
                             navigator.clipboard.writeText(share).then(function () {
@@ -780,7 +782,14 @@
                         if (prep && prep.mode === 'direct') {
                             var putRes = await fetch(prep.url, { method: 'PUT', body: file });
                             if (!putRes.ok) throw new Error('写入存储服务失败 HTTP ' + putRes.status);
-                            blob = { pathname: prep.pathname, url: '', downloadUrl: '' };
+                            var fileName = String(prep.pathname || '').split('/').pop();
+                            var shortUrl = window.location.origin + '/file/get?n=' +
+                                encodeURIComponent(fileName);
+                            blob = {
+                                pathname: prep.pathname,
+                                url: shortUrl,
+                                downloadUrl: shortUrl,
+                            };
                         } else {
                             blob = await sdk.upload(key, file, {
                                 access: 'public',
