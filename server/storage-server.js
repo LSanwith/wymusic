@@ -486,7 +486,10 @@ const server = http.createServer(async (req, res) => {
           const stat = await fsp.stat(file)
           const name = key.split('/').pop()
           const inline = url.searchParams.get('inline') === '1'
-          const ascii = encodeURIComponent(name).replace(/%/g, '_').replace(/[^A-Za-z0-9._-]/g, '_') || 'file'
+          const ascii =
+            encodeURIComponent(name)
+              .replace(/%/g, '_')
+              .replace(/[^A-Za-z0-9._-]/g, '_') || 'file'
           res.writeHead(200, {
             // 页面会用 fetch() 读字节显示进度，跨域读必须带 CORS 头
             'access-control-allow-origin': '*',
