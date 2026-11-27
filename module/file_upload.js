@@ -142,7 +142,11 @@ module.exports = async (query) => {
   }
 
   // 先看客户端把文件放在哪个前缀下
-  const parsed = parsePathname(query.payload && query.payload.pathname)
+  // pathname 优先从 query 取：页面把它放在 URL 上，服务端 2 分钟的接口缓存
+  // 才会按文件区分（否则两分钟内传第二个文件会拿到上一个的直传地址）
+  const parsed = parsePathname(
+    query.pathname || (query.payload && query.payload.pathname),
+  )
   if (!parsed) {
     return {
       status: 400,

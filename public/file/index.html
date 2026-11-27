@@ -761,7 +761,8 @@
                         /* 先问服务端怎么传：
                            - Vercel Blob 模式 → 返回客户端令牌，交给 SDK 直传
                            - 自建存储模式   → 返回签名直传地址，直接 PUT 过去 */
-                        var prepRes = await fetch(withPass('/file/upload'), {
+                        var prepRes = await fetch(withPass('/file/upload?pathname=' +
+                            encodeURIComponent(key) + '&_=' + Date.now()), {
                             method: 'POST',
                             headers: { 'content-type': 'application/json' },
                             body: JSON.stringify({
