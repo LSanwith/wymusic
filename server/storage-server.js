@@ -488,6 +488,10 @@ const server = http.createServer(async (req, res) => {
           const inline = url.searchParams.get('inline') === '1'
           const ascii = encodeURIComponent(name).replace(/%/g, '_').replace(/[^A-Za-z0-9._-]/g, '_') || 'file'
           res.writeHead(200, {
+            // 页面会用 fetch() 读字节显示进度，跨域读必须带 CORS 头
+            'access-control-allow-origin': '*',
+            'access-control-expose-headers':
+              'content-length, content-disposition',
             'content-type': contentTypeOf(name),
             'content-length': stat.size,
             // 下载时保留原文件名（中文用 RFC 5987 的 filename*）
@@ -506,7 +510,10 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'HEAD') {
         try {
           const stat = await fsp.stat(file)
-          res.writeHead(200, { 'content-length': stat.size })
+          res.writeHead(200, {
+            'access-control-allow-origin': '*',
+            'content-length': stat.size,
+          })
           res.end()
         } catch {
           res.writeHead(404)
