@@ -174,10 +174,14 @@
                 return false;
             }
 
+            var songNames = {};   // 歌曲 id -> 歌名，来自 /ttml/admin/list
+
             function chip(id) {
                 var s = document.createElement('span');
                 s.className = 'chip';
-                s.textContent = id;
+                var name = songNames[id] || songNames[String(id)] || '';
+                s.textContent = name ? id + ' · ' + name : id;
+                if (name) s.title = name;
                 return s;
             }
 
@@ -399,6 +403,7 @@
                             return;
                         }
                         // 过滤掉本会话里已经删掉的，别让刷新把刚删的又显示出来
+                        songNames = r.data.names || {};
                         var items = (r.data.items || []).filter(function (it) {
                             return !deleted[it.ttmlId];
                         });

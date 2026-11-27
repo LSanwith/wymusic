@@ -4,8 +4,31 @@
 // 只读，不含歌词正文（正文在 /search?ttml=<歌曲id>，本来就是公开可读的）。
 // 删除（/ttml/destroy）才需要管理密码，和这里分开。
 const store = require('../plugins/ttmlStore.js')
+const createOption = require('../util/option.js')
 
-module.exports = async () => {
+/** 批量把歌曲 id 换成歌名；失败就返回空表，不影响列表本身 */
+async function songNames(ids, query, request) {
+  const out = {}
+  if (!ids.length || typeof request !== 'function') return out
+  const data = {
+    c: '[' + ids.map((id) => '{"id":' + Number(id) + '}').join(',') + ']',
+  }
+  try {
+    const resp = await request(
+      '/api/v3/song/detail',
+      data,
+      createOption(query, 'weapi'),
+    )
+    for (const s of (resp && resp.body && resp.body.songs) || []) {
+      out[String(s.id)] = s.name || ''
+    }
+  } catch {
+    /* 上游挂了就不显示歌名 */
+  }
+  return out
+}
+
+module.exports = async (query, request) => {
   if (!store.hasToken()) {
     return {
       status: 501,
@@ -41,10 +64,22 @@ module.exports = async () => {
     api: it.ids.length ? '/search?ttml=' + it.ids[0] : null,
   }))
 
+  // 收集所有 id（含老格式），一次批量换歌名
+  const allIds = []
+  for (const it of items) for (const id of it.ids) allIds.push(id)
+  for (const it of data.legacy || []) allIds.push(String(it.songId))
+  const names = await songNames(
+    [...new Set(allIds)].slice(0, 60),
+    query,
+    request,
+  )
+
   return {
     status: 200,
     body: {
       code: 200,
+      // 歌曲 id -> 歌名（页面在 id 旁边显示）
+      names,
       total: items.length,
       bindingCount: data.bindingCount,
       items,
